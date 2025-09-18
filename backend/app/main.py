@@ -13,6 +13,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# endpoints registered
 app.include_router(api_router)
 
 
