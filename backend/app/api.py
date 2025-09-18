@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder  ###
 from uuid import uuid4  # helps generate unique id per upload
 from pathlib import Path
 import pandas as pd
@@ -45,14 +46,24 @@ async def upload(file: UploadFile = File(...)):
     parquet_path = updir / "df.parquet"
     df.to_parquet(parquet_path, index=False)
 
+    sample_df = df.head(50).copy()  ###
+    dt_cols = sample_df.select_dtypes(include=["datetime", "datetimetz"]).columns  ###
+    for c in dt_cols:  ###
+        sample_df[c] = pd.to_datetime(sample_df[c]).dt.strftime(
+            "%Y-%m-%dT%H:%M:%S"
+        )  ###
+    sample_df = sample_df.where(sample_df.notna(), None)  ###
+
     # sample that i'll send to frontend
-    sample = df.head(50).to_dict(orient="records")
+    sample = sample_df.to_dict(orient="records")
     return JSONResponse(
-        {
-            "dataset_id": dataset_id,  # dataset reference id
-            "n_rows": int(len(df)),
-            "n_cols": int(df.shape[1]),
-            "columns": list(df.columns.map(str)),  # column names as strings
-            "sample": sample,  # sample of table
-        }
+        jsonable_encoder(
+            {  ###
+                "dataset_id": dataset_id,  # dataset reference id
+                "n_rows": int(len(df)),
+                "n_cols": int(df.shape[1]),
+                "columns": list(df.columns.map(str)),  # column names as strings
+                "sample": sample,  # sample of table
+            }
+        )
     )
