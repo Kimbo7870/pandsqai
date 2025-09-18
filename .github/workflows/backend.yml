@@ -2,20 +2,13 @@ name: backend-ci
 
 on:
   push:
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
+    paths: ["backend/**", ".github/workflows/backend.yml"]
   pull_request:
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
+    paths: ["backend/**", ".github/workflows/backend.yml"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend   # all `run:` steps happen in /backend
     steps:
       - uses: actions/checkout@v4
 
@@ -26,16 +19,19 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
 
       - name: Install deps
+        working-directory: backend
         run: pip install -r requirements-dev.txt
 
       - name: Lint (Ruff)
+        working-directory: backend
         run: ruff check .
 
       - name: Format check (Black)
-        run: black --check .
-
-      - name: Type check (Mypy)  # optional, remove if not ready
-        run: mypy .
+        working-directory: backend
+        run: black --check --diff .
 
       - name: Tests
+        working-directory: backend
+        env:
+          PYTHONPATH: ${{ github.workspace }}/backend
         run: pytest -q
