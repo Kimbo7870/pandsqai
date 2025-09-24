@@ -1,6 +1,6 @@
 // API helper functions to connect to FastAPI backend, will have fetch logic
 
-import type { UploadInfo } from "./types";
+import type { UploadInfo, ProfileInfo } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -18,4 +18,15 @@ export async function uploadDataset(file: File): Promise<UploadInfo> {
   }
 
   return res.json() as Promise<UploadInfo>; // Type assertion is dev-time, care, trusts backend matches UploadInfo.
+}
+
+export async function getProfile(dataset_id: string): Promise<ProfileInfo> {
+  const res = await fetch(`${API_BASE}/profile?dataset_id=${dataset_id}`);
+  
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Profile failed with ${res.status}`);
+  }
+
+  return res.json() as Promise<ProfileInfo>;
 }
