@@ -1,30 +1,30 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from pathlib import Path
 import pandas as pd
 import numpy as np
 from typing import Any
 
 from .utils import get_content_hash, get_hash_seed
+from .errors import api_error
+from .config import settings
 
 router = APIRouter()  # endpoints
-DATA_DIR = Path("data")
 
 
 @router.get("/profile")
 async def profile(dataset_id: str):
     """Profile a dataset by dataset_id, returns column stats and feature flags"""
-    updir = DATA_DIR / dataset_id
+    updir = settings.DATA_DIR / dataset_id
     parquet_path = updir / "df.parquet"
 
     if not updir.exists() or not parquet_path.exists():
-        raise HTTPException(status_code=404, detail="Dataset not found")
+        raise api_error(404, "DATASET_NOT_FOUND", "Dataset not found")
 
     try:
         df = pd.read_parquet(parquet_path)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read dataset: {e}")
+        raise api_error(400, "PARQUET_READ_FAILED", f"Failed to read dataset: {e}")
 
     n_rows = int(len(df))
     n_cols = int(df.shape[1])

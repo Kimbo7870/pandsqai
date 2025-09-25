@@ -1,8 +1,7 @@
 from __future__ import annotations
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
-from pathlib import Path
 from typing import Any, Dict, List
 import hashlib
 import numpy as np
@@ -10,9 +9,11 @@ import pandas as pd
 
 from .utils import get_content_hash, get_hash_seed
 from .services.questions.templates import TemplateContext, TEMPLATES
+from .errors import api_error
+from .config import settings
+
 
 router = APIRouter()
-DATA_DIR = Path("data")
 
 
 def _qid(dataset_id: str, payload: Dict[str, Any]) -> str:
@@ -25,15 +26,17 @@ def _qid(dataset_id: str, payload: Dict[str, Any]) -> str:
 @router.get("/questions")
 async def get_questions(dataset_id: str, limit: int = 12, seed: int | None = None):
     """Deterministic questions; mix seed with dataset content hash."""
-    updir = DATA_DIR / dataset_id
-    p = updir / "df.parquet"
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="Dataset not found")
+    if limit < 1 or limit > 64:
+        raise api_error(400, "BAD_LIMIT", "limit must be between 1 and 64")
+    updir = settings.DATA_DIR / dataset_id
+    parquet_path = updir / "df.parquet"
+    if not updir.exists() or not parquet_path.exists():
+        raise api_error(404, "DATASET_NOT_FOUND", "Dataset not found")
 
     try:
-        df = pd.read_parquet(p)
+        df = pd.read_parquet(parquet_path)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to read dataset: {e}")
+        raise api_error(400, "PARQUET_READ_FAILED", f"Failed to read dataset: {e}")
 
     # deterministic but random
     content_hash = get_content_hash(df)
