@@ -6,10 +6,11 @@ interface ProfileViewProps {
   dataset_id: string;
 }
 
+// fetches dataset profile from backend, then renders basic counts, table of per-column states, and pivot candidates
 export default function ProfileView({ dataset_id }: ProfileViewProps) {
-  const [profile, setProfile] = useState<ProfileInfo | null>(null);
+  const [profile, setProfile] = useState<ProfileInfo | null>(null); // loaded data
   const [err, setErr] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(true); // while fetching, set this
 
   useEffect(() => {
     setLoading(true);

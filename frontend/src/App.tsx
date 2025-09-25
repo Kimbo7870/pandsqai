@@ -4,9 +4,11 @@ import { useState } from "react";
 import { uploadDataset } from "./lib/api";
 import type { UploadInfo, Cell } from "./lib/types";
 import ProfileView from "./components/ProfileView";
+import QuestionsView from "./components/QuestionsView";
 
-type Tab = "upload" | "profile";
+type Tab = "upload" | "profile" | "questions";
 
+// user picks a CSV/Parquet file, shows a sample preview (50 lines), and can reveal the Profile/Question tabs once dataset is uploaded
 export default function App() {
   const [info, setInfo] = useState<UploadInfo | null>(null); // holds server response (null before upload)
   const [err, setErr] = useState<string>(""); // human readable error message
@@ -45,6 +47,12 @@ export default function App() {
               className={`px-4 py-2 ${tab === "profile" ? "border-b-2 border-blue-600 font-semibold" : "text-gray-600"}`}
             >
               Profile
+            </button>
+            <button
+              onClick={() => setTab("questions")}
+              className={`px-4 py-2 ${tab === "questions" ? "border-b-2 border-blue-600 font-semibold" : "text-gray-600"}`}
+            >
+              Questions
             </button>
           </div>
         )}
@@ -100,6 +108,8 @@ export default function App() {
         )}
 
         {tab === "profile" && info && <ProfileView dataset_id={info.dataset_id} />}
+
+        {tab === "questions" && info && <QuestionsView dataset_id={info.dataset_id} />}
       </div>
     </div>
   );

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
 from .api import router as api_router
 from .profile import router as profile_router
+from .questions import router as questions_router
 
 app = FastAPI(title="PandasQuiz API")
 
@@ -17,6 +18,7 @@ app.add_middleware(
 # endpoints registered
 app.include_router(api_router)
 app.include_router(profile_router)
+app.include_router(questions_router)
 
 
 # Optional root

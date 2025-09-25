@@ -5,30 +5,11 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from typing import Any
-import hashlib
 
-router = APIRouter()
+from .utils import get_content_hash, get_hash_seed
+
+router = APIRouter()  # endpoints
 DATA_DIR = Path("data")
-
-
-def get_content_hash(df: pd.DataFrame) -> str:
-    """Generate deterministic hash based on dataframe content"""
-    # Use column names + first/last row to create content fingerprint
-    content_parts = [
-        ",".join(df.columns.astype(str)),
-        df.iloc[0].to_json() if len(df) > 0 else "",
-        df.iloc[-1].to_json() if len(df) > 0 else "",
-        str(len(df)),
-        str(df.shape[1]),
-    ]
-    content_str = "|".join(content_parts)
-    return hashlib.sha256(content_str.encode()).hexdigest()[:16]
-
-
-def get_hash_seed(content_hash: str, column_name: str) -> int:
-    """Generate deterministic seed from content hash and column name"""
-    hash_str = hashlib.sha256(f"{content_hash}{column_name}".encode()).hexdigest()
-    return int(hash_str[:8], 16)
 
 
 @router.get("/profile")
@@ -59,9 +40,11 @@ async def profile(dataset_id: str):
 
     for col_name in df.columns:
         col = df[col_name]
+        # convert names/dtyles to strings for json-serialize
         col_name_str = str(col_name)
         dtype_str = str(col.dtype)
 
+        # count nulls and uniques
         null_count = int(col.isna().sum())
         unique_count = int(col.nunique(dropna=True))
 
@@ -88,7 +71,7 @@ async def profile(dataset_id: str):
             "examples": examples,
         }
 
-        # Numeric columns
+        # Numeric columns (compute min/mean/max/std)
         if pd.api.types.is_numeric_dtype(col):
             has_numeric = True
             col_info["min"] = (
@@ -104,7 +87,7 @@ async def profile(dataset_id: str):
                 round(float(col.std()), 2) if not col.isna().all() else None
             )
 
-        # Datetime columns
+        # Datetime columns (get mix/max timestamps)
         elif pd.api.types.is_datetime64_any_dtype(col):
             has_datetime = True
             if not col.isna().all():
