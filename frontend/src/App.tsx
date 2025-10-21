@@ -5,8 +5,9 @@ import { uploadDataset } from "./lib/api";
 import type { UploadInfo, Cell } from "./lib/types";
 import ProfileView from "./components/ProfileView";
 import QuestionsView from "./components/QuestionsView";
+import QuizPlay from "./components/QuizPlay";
 
-type Tab = "upload" | "profile" | "questions";
+type Tab = "upload" | "profile" | "questions" | "quiz";
 
 // user picks a CSV/Parquet file, shows a sample preview (50 lines), and can reveal the Profile/Question tabs once dataset is uploaded
 export default function App() {
@@ -53,6 +54,12 @@ export default function App() {
               className={`px-4 py-2 ${tab === "questions" ? "border-b-2 border-blue-600 font-semibold" : "text-gray-600"}`}
             >
               Questions
+            </button>
+            <button
+              onClick={() => setTab("quiz")}
+              className={`px-4 py-2 ${tab === "questions" ? "border-b-2 border-blue-600 font-semibold" : "text-gray-600"}`}
+            >
+              Quiz
             </button>
           </div>
         )}
@@ -110,6 +117,12 @@ export default function App() {
         {tab === "profile" && info && <ProfileView dataset_id={info.dataset_id} />}
 
         {tab === "questions" && info && <QuestionsView dataset_id={info.dataset_id} />}
+
+        {tab === "quiz" && info && (
+          <div className="mt-4">
+            <h2 className="text-lg font-semibold mb-2">Quiz Mode</h2>
+            <QuizPlay dataset_id={info.dataset_id} limit={8} seed={0} />
+          </div>)}
       </div>
     </div>
   );
