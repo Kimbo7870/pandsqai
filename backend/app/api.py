@@ -1,7 +1,7 @@
 from fastapi import APIRouter, UploadFile, File
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder  ###
-from uuid import uuid4  # helps generate unique id per upload
+import shortuuid
 import pandas as pd
 
 from .config import settings
@@ -28,7 +28,7 @@ async def upload(file: UploadFile = File(...)):
     if len(contents) > 10 * 1024 * 1024:
         raise api_error(413, "FILE_TOO_LARGE", "File too large (>10MB)")
     # separate each dataset by unique id, and each unique id associates with a folder
-    dataset_id = str(uuid4())
+    dataset_id = shortuuid.uuid()
     updir = settings.DATA_DIR / dataset_id
     updir.mkdir(parents=True, exist_ok=True)
 
