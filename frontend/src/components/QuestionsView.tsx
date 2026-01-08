@@ -68,7 +68,7 @@ export default function QuestionsView({ dataset_id }: Props) {
             type="number"
             value={seed}
             onChange={(e) => setSeed(parseInt(e.target.value || "0", 10))}
-            className="border rounded px-2 py-1 text-sm w-28"
+            className="border border-gray-300 rounded px-2 py-1 text-sm w-28"
           />
         </div>
         <div>
@@ -79,17 +79,17 @@ export default function QuestionsView({ dataset_id }: Props) {
             max={64}
             value={limit}
             onChange={(e) => setLimit(parseInt(e.target.value || "12", 10))}
-            className="border rounded px-2 py-1 text-sm w-28"
+            className="border border-gray-300 rounded px-2 py-1 text-sm w-28"
           />
         </div>
         <button
           onClick={fetchQuestions}
-          className="px-3 py-2 rounded bg-blue-600 text-white text-sm shadow"
+          className="px-3 py-2 rounded bg-gray-600 text-white text-sm shadow hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
           disabled={loading || !canFetch}
         >
           {loading ? "Generating…" : "Generate"}
         </button>
-        {err && <span className="text-red-600 text-sm">{err}</span>}
+        {err && <span className="text-gray-700 text-sm">{err}</span>}
       </div>
 
       {data && (
@@ -97,27 +97,27 @@ export default function QuestionsView({ dataset_id }: Props) {
           <p className="text-sm text-gray-700">
             <b>Seed:</b> {data.seed} • <b>Count:</b> {data.count}
           </p>
-          <div className="overflow-auto border rounded">
+          <div className="overflow-auto border border-gray-300 rounded">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="bg-gray-100">
-                  <th className="px-2 py-1 text-left border-b">Type</th>
-                  <th className="px-2 py-1 text-left border-b">Prompt</th>
-                  <th className="px-2 py-1 text-left border-b">Choices</th>
-                  <th className="px-2 py-1 text-left border-b">Answer</th>
-                  <th className="px-2 py-1 text-left border-b">Meta</th>
+                  <th className="px-2 py-1 text-left border-b border-gray-300">Type</th>
+                  <th className="px-2 py-1 text-left border-b border-gray-300">Prompt</th>
+                  <th className="px-2 py-1 text-left border-b border-gray-300">Choices</th>
+                  <th className="px-2 py-1 text-left border-b border-gray-300">Answer</th>
+                  <th className="px-2 py-1 text-left border-b border-gray-300">Meta</th>
                 </tr>
               </thead>
               <tbody>
                 {data.questions.map((q: Question) => (
                   <tr key={q.id} className="odd:bg-gray-50 align-top">
-                    <td className="px-2 py-1 border-b text-xs font-mono">{q.type}</td>
-                    <td className="px-2 py-1 border-b text-xs">{q.prompt}</td>
-                    <td className="px-2 py-1 border-b text-xs">
+                    <td className="px-2 py-1 border-b border-gray-300 text-xs font-mono">{q.type}</td>
+                    <td className="px-2 py-1 border-b border-gray-300 text-xs">{q.prompt}</td>
+                    <td className="px-2 py-1 border-b border-gray-300 text-xs">
                       {"choices" in q && q.choices ? q.choices.join(", ") : "—"}
                     </td>
-                    <td className="px-2 py-1 border-b text-xs">{renderAnswer(q)}</td>
-                    <td className="px-2 py-1 border-b text-xs">
+                    <td className="px-2 py-1 border-b border-gray-300 text-xs">{renderAnswer(q)}</td>
+                    <td className="px-2 py-1 border-b border-gray-300 text-xs">
                       {JSON.stringify(q.metadata)}
                     </td>
                   </tr>

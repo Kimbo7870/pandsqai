@@ -274,7 +274,7 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
   }, [q]);
 
   if (loading) return <p className="text-gray-600">Loading quiz…</p>;
-  if (err) return <p className="text-red-600">{err}</p>;
+  if (err) return <p className="text-gray-700">{err}</p>;
   if (!data || data.questions.length === 0) return <p>No questions.</p>;
 
   const total = data.questions.length;
@@ -308,7 +308,7 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
       </div>
 
       {/* Stem */}
-      <div className="p-4 border rounded">
+      <div className="p-4 border border-gray-300 rounded">
         <p className="text-sm">{stem}</p>
       </div>
 
@@ -318,13 +318,13 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
           {choices!.map((c, idx) => {
             const selectedCls =
               selectedIndex === idx
-                ? "border-blue-600 ring-1 ring-blue-600"
+                ? "border-gray-600 ring-1 ring-gray-600"
                 : "border-gray-200";
             const feedback =
               locked && idx === correctIndex
-                ? "bg-green-50 border-green-500"
+                ? "bg-gray-100 border-gray-800"
                 : locked && selectedIndex === idx && idx !== correctIndex
-                ? "bg-red-50 border-red-500"
+                ? "bg-gray-50 border-gray-400"
                 : "";
             const groupName = `q-${qid ?? `q-${i}`}`;
             return (
@@ -353,15 +353,15 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
             value={textInput}
             onChange={(e) => setTextInput(e.target.value)}
             disabled={locked}
-            className="w-full px-3 py-2 border rounded text-sm outline-none focus:ring-2 focus:ring-blue-600"
+            className="w-full px-3 py-2 border border-gray-300 rounded text-sm outline-none focus:ring-2 focus:ring-gray-600"
             placeholder="Type your answer…"
           />
           {locked && (
             <div className="text-sm">
               {textCorrect ? (
-                <span className="text-green-700">Correct</span>
+                <span className="text-gray-900 font-semibold">Correct</span>
               ) : (
-                <span className="text-red-700">
+                <span className="text-gray-700">
                   Incorrect — correct answer:{" "}
                   <span className="font-mono">
                     {q ? toAnswerString((q as QuizItemShape).answer) : ""}
@@ -376,14 +376,14 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
       {/* Actions */}
       <div className="flex items-center gap-3">
         <button
-          className="px-3 py-2 rounded bg-gray-100"
+          className="px-3 py-2 rounded bg-gray-100 border border-gray-300 hover:bg-gray-200 active:bg-gray-300 transition-colors disabled:opacity-50"
           onClick={() => go(-1)}
           disabled={i === 0}
         >
           Prev
         </button>
         <button
-          className="px-3 py-2 rounded bg-blue-600 text-white"
+          className="px-3 py-2 rounded bg-gray-600 text-white hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
           onClick={onSubmit}
           disabled={
             locked ||
@@ -393,7 +393,7 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
           Submit
         </button>
         <button
-          className="px-3 py-2 rounded bg-gray-100"
+          className="px-3 py-2 rounded bg-gray-100 border border-gray-300 hover:bg-gray-200 active:bg-gray-300 transition-colors disabled:opacity-50"
           onClick={() => go(+1)}
           disabled={i === total - 1}
         >
@@ -404,9 +404,9 @@ export default function QuizPlay({ dataset_id, limit = 8, seed = 0 }: Props) {
         {locked && (
           <span className="text-sm">
             {(isMC && mcCorrect) || (!isMC && textCorrect) ? (
-              <span className="text-green-700">Correct</span>
+              <span className="text-gray-900 font-semibold">Correct</span>
             ) : (
-              <span className="text-red-700">Incorrect</span>
+              <span className="text-gray-700">Incorrect</span>
             )}
           </span>
         )}

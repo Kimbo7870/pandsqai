@@ -5,6 +5,7 @@ export type Cell = string | number | boolean | null | undefined; // data values 
  * Shape of thing /upload endpoint returns in python backend:
  * {
  *   dataset_id: "uuid",
+ *   display_name: "file.csv",
  *   n_rows: 123,
  *   n_cols: 5,
  *   columns: ["a", "b", ...],
@@ -16,10 +17,24 @@ export type Cell = string | number | boolean | null | undefined; // data values 
 
 export interface UploadInfo {
   dataset_id: string;
+  display_name: string;
   n_rows: number;
   n_cols: number;
   columns: string[];
   sample: Array<Record<string, Cell>>;
+}
+
+// Shape for dataset list item (from /datasets endpoint)
+export interface DatasetListItem {
+  dataset_id: string;
+  display_name: string;
+  n_rows: number;
+  n_cols: number;
+}
+
+// Shape for /datasets endpoint response
+export interface DatasetsResponse {
+  datasets: DatasetListItem[];
 }
 
 export interface TopKEntry {

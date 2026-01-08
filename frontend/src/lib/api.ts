@@ -1,6 +1,6 @@
 // API helper functions to connect to FastAPI backend, will have fetch logic
 
-import type { UploadInfo, ProfileInfo, QuestionsResponse } from "./types";
+import type { UploadInfo, ProfileInfo, QuestionsResponse, DatasetsResponse } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
@@ -47,4 +47,24 @@ export async function getQuestions(
     throw new Error(msg || `Questions failed with ${res.status}`);
   }
   return res.json() as Promise<QuestionsResponse>;
+}
+
+// GET /datasets - list all past datasets
+export async function listDatasets(): Promise<DatasetsResponse> {
+  const res = await fetch(`${API_BASE}/datasets`);
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Failed to list datasets with ${res.status}`);
+  }
+  return res.json() as Promise<DatasetsResponse>;
+}
+
+// GET /datasets/{dataset_id} - load a specific past dataset
+export async function getDataset(dataset_id: string): Promise<UploadInfo> {
+  const res = await fetch(`${API_BASE}/datasets/${encodeURIComponent(dataset_id)}`);
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Failed to load dataset with ${res.status}`);
+  }
+  return res.json() as Promise<UploadInfo>;
 }

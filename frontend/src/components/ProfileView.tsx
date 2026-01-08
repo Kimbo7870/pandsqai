@@ -30,7 +30,7 @@ export default function ProfileView({ dataset_id }: ProfileViewProps) {
   }, [dataset_id]);
 
   if (loading) return <p className="text-gray-600">Loading profile...</p>;
-  if (err) return <p className="text-red-600">{err}</p>;
+  if (err) return <p className="text-gray-700">{err}</p>;
   if (!profile) return null;
 
   const { n_rows, n_cols, columns, features } = profile;
@@ -48,16 +48,16 @@ export default function ProfileView({ dataset_id }: ProfileViewProps) {
         </p>
       </div>
 
-      <div className="overflow-auto border rounded">
+      <div className="overflow-auto border border-gray-300 rounded">
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-gray-100">
-              <th className="px-2 py-1 text-left border-b">Name</th>
-              <th className="px-2 py-1 text-left border-b">Type</th>
-              <th className="px-2 py-1 text-left border-b">% Null</th>
-              <th className="px-2 py-1 text-left border-b"># Unique</th>
-              <th className="px-2 py-1 text-left border-b">Examples</th>
-              <th className="px-2 py-1 text-left border-b">Stats</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300">Name</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300">Type</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300">% Null</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300"># Unique</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300">Examples</th>
+              <th className="px-2 py-1 text-left border-b border-gray-300">Stats</th>
             </tr>
           </thead>
           <tbody>
@@ -66,11 +66,11 @@ export default function ProfileView({ dataset_id }: ProfileViewProps) {
               
               return (
                 <tr key={col.name} className="odd:bg-gray-50">
-                  <td className="px-2 py-1 border-b font-mono text-xs">{col.name}</td>
-                  <td className="px-2 py-1 border-b text-xs">{col.dtype}</td>
-                  <td className="px-2 py-1 border-b text-xs">{pct_null}%</td>
-                  <td className="px-2 py-1 border-b text-xs">{col.unique_count.toLocaleString()}</td>
-                  <td className="px-2 py-1 border-b text-xs">
+                  <td className="px-2 py-1 border-b border-gray-300 font-mono text-xs">{col.name}</td>
+                  <td className="px-2 py-1 border-b border-gray-300 text-xs">{col.dtype}</td>
+                  <td className="px-2 py-1 border-b border-gray-300 text-xs">{pct_null}%</td>
+                  <td className="px-2 py-1 border-b border-gray-300 text-xs">{col.unique_count.toLocaleString()}</td>
+                  <td className="px-2 py-1 border-b border-gray-300 text-xs">
                     {col.examples.map((ex, i) => (
                       <span key={i}>
                         {String(ex ?? "null")}
@@ -78,7 +78,7 @@ export default function ProfileView({ dataset_id }: ProfileViewProps) {
                       </span>
                     ))}
                   </td>
-                  <td className="px-2 py-1 border-b text-xs">
+                  <td className="px-2 py-1 border-b border-gray-300 text-xs">
                     {col.min !== undefined && (
                       <div>min: {col.min}, mean: {col.mean}, max: {col.max}, std: {col.std}</div>
                     )}
