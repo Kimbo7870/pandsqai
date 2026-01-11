@@ -19,7 +19,11 @@ from .datasets.metadata import (
 )
 from .datasets.naming import generate_unique_display_name
 from .datasets.sampling import make_sample_records
-from .datasets.store import read_parquet_df, write_parquet_df, get_parquet_row_col_counts
+from .datasets.store import (
+    read_parquet_df,
+    write_parquet_df,
+    get_parquet_row_col_counts,
+)
 
 router = APIRouter()  # router for endpoints
 
@@ -31,7 +35,9 @@ async def upload(file: UploadFile = File(...)):
         raise api_error(400, "FILE_TOO_LARGE", "Max file size is 50MB")
 
     name = file.filename or "upload"
-    if not name.lower().endswith((".csv", ".parquet")):  # supporting csv or parquet for now
+    if not name.lower().endswith(
+        (".csv", ".parquet")
+    ):  # supporting csv or parquet for now
         raise api_error(400, "BAD_EXTENSION", "Only .csv or .parquet allowed")
 
     # Size guard by reading into bytes and keeping size less than 10 MB
@@ -91,7 +97,9 @@ async def upload(file: UploadFile = File(...)):
         try:
             write_parquet_df(df, parquet_path)
         except Exception as e:
-            raise api_error(500, "PARQUET_WRITE_FAILED", f"Failed to write parquet: {e}")
+            raise api_error(
+                500, "PARQUET_WRITE_FAILED", f"Failed to write parquet: {e}"
+            )
 
     sample = make_sample_records(df, n=50)
 

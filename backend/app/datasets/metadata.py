@@ -43,7 +43,11 @@ def get_all_display_names() -> set[str]:
                     pass
             # Fallback: look for original uploaded file (csv or parquet, not df.parquet)
             for f in subdir.iterdir():
-                if f.is_file() and f.name != "df.parquet" and not f.name.startswith("."):
+                if (
+                    f.is_file()
+                    and f.name != "df.parquet"
+                    and not f.name.startswith(".")
+                ):
                     if f.suffix.lower() in (".csv", ".parquet"):
                         names.add(f.name)
                         break
