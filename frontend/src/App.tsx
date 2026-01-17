@@ -8,9 +8,11 @@ import QuestionsView from "./components/QuestionsView";
 import QuizPlay from "./components/QuizPlay";
 import PastFilesPage from "./components/PastFilesPage";
 import UploadTab from "./components/UploadTab";
+import SqlEditorPage from "./components/SqlEditorPage";
+import PandasEditorPage from "./components/PandasEditorPage";
 
 type Tab = "upload" | "profile" | "questions" | "quiz";
-type Page = "home" | "past-files";
+type Page = "home" | "past-files" | "sql-editor" | "pandas-editor";
 
 // user picks a CSV/Parquet file, shows a sample preview (50 lines), and can reveal the Profile/Question tabs once dataset is uploaded
 export default function App() {
@@ -111,20 +113,54 @@ export default function App() {
     );
   }
 
+  if (page === "sql-editor") {
+    return (
+      <SqlEditorPage
+        dataset_id={info ? info.dataset_id : null}
+        onBack={goBackHome}
+      />
+    );
+  }
+
+  if (page === "pandas-editor") {
+    return (
+      <PandasEditorPage
+        dataset_id={info ? info.dataset_id : null}
+        onBack={goBackHome}
+      />
+    );
+  }
+
   // Render Home page
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-6xl mx-auto space-y-4">
-        <div className="flex justify-between items-center">
+        <div className="flex justify-between items-center gap-2">
           <h1 className="text-2xl font-semibold">Upload dataset</h1>
-          {info && (
+          <div className="flex items-center gap-2">
             <button
-              onClick={clearDataset}
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors"
+              onClick={() => setPage("sql-editor")}
+              disabled={!info}
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
             >
-              Clear File
+              SQL editor
             </button>
-          )}
+            <button
+              onClick={() => setPage("pandas-editor")}
+              disabled={!info}
+              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
+            >
+              Pandas editor
+            </button>
+            {info && (
+              <button
+                onClick={clearDataset}
+                className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors"
+              >
+                Clear File
+              </button>
+            )}
+          </div>
         </div>
 
         {info && (
