@@ -8,6 +8,7 @@ interface Props {
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   handleChooseFile: () => void;
   goToPastFiles: () => Promise<void>;
+  allowHorizontalScroll: boolean;
 }
 
 export default function UploadTab({
@@ -18,6 +19,7 @@ export default function UploadTab({
   onChange,
   handleChooseFile,
   goToPastFiles,
+  allowHorizontalScroll,
 }: Props) {
   return (
     <>
@@ -59,8 +61,19 @@ export default function UploadTab({
             <b>Cols:</b> {info.n_cols}
           </p>
 
-          {/* render and display */}
-          <div className="overflow-auto border border-gray-300 rounded">
+          {/* 
+            When no editor is open:
+              - keep current "no horizontal scroll" feel by hiding overflow-x
+              - still allow vertical scroll
+            When editor is open:
+              - allow horizontal scroll (overflow-auto)
+          */}
+          <div
+            className={
+              (allowHorizontalScroll ? "overflow-auto" : "overflow-y-auto overflow-x-hidden") +
+              " border border-gray-300 rounded"
+            }
+          >
             <table className="min-w-full text-sm">
               <thead>
                 <tr>
