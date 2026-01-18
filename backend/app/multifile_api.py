@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import decimal
 import json
+import math
 import shutil
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
@@ -106,6 +109,123 @@ def _safe_display_name_uploaded_at(dataset_id: str) -> tuple[str, str | None]:
         uploaded_at = None
 
     return display_name, uploaded_at
+
+def _clamp_int(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(hi, v))
+
+
+def _json_safe_cell(v: Any) -> str | int | float | bool | None:
+    """Convert a single cell to JSON-safe primitive."""
+    if v is None:
+        return None
+
+    # unwrap numpy scalars
+    if hasattr(v, "item") and callable(getattr(v, "item")):
+        try:
+            return _json_safe_cell(v.item())
+        except Exception:
+            pass
+
+    # pandas NaT
+    try:
+        if v is pd.NaT:
+            return None
+    except Exception:
+        pass
+
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    if isinstance(v, str):
+        return v
+
+    if isinstance(v, decimal.Decimal):
+        try:
+            return float(v)
+        except Exception:
+            return str(v)
+
+    if isinstance(v, (datetime, date)):
+        try:
+            return v.isoformat()
+        except Exception:
+            return str(v)
+
+    if isinstance(v, pd.Timestamp):
+        try:
+            if pd.isna(v):
+                return None
+            return v.to_pydatetime().isoformat()
+        except Exception:
+            return str(v)
+
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            return v.decode("utf-8", errors="replace")
+        except Exception:
+            return str(v)
+
+    return str(v)
+
+
+def _df_to_rows_2d(df: pd.DataFrame) -> list[list[str | int | float | bool | None]]:
+    # datetimes -> ISO-ish strings
+    dt_cols = df.select_dtypes(include=["datetime", "datetimetz"]).columns
+    for c in dt_cols:
+        df[c] = pd.to_datetime(df[c], errors="coerce").map(
+            lambda x: x.isoformat() if pd.notna(x) else None
+        )
+
+    # NaN/NaT -> None
+    df = df.where(df.notna(), None)
+
+    arr = df.to_numpy(dtype=object)
+    return [[_json_safe_cell(v) for v in row] for row in arr.tolist()]
+
+
+def _read_parquet_chunk_df(
+    parquet_path: Path,
+    columns: list[str],
+    row_start: int,
+    n_rows: int,
+) -> pd.DataFrame:
+    """Read only required row groups intersecting [row_start, row_start+n_rows)."""
+    import pyarrow.parquet as pq
+
+    if n_rows <= 0:
+        return pd.DataFrame({c: [] for c in columns})
+
+    pf = pq.ParquetFile(parquet_path)
+    total_rows = int(pf.metadata.num_rows)
+    if total_rows <= 0:
+        return pd.DataFrame({c: [] for c in columns})
+
+    row_end = row_start + n_rows
+
+    needed: list[int] = []
+    rg_start = 0
+    first_rg_start: int | None = None
+    for i in range(pf.metadata.num_row_groups):
+        rg_rows = int(pf.metadata.row_group(i).num_rows)
+        rg_end = rg_start + rg_rows
+        if rg_end > row_start and rg_start < row_end:
+            needed.append(i)
+            if first_rg_start is None:
+                first_rg_start = rg_start
+        rg_start = rg_end
+
+    if not needed:
+        return pd.DataFrame({c: [] for c in columns})
+
+    table = pf.read_row_groups(needed, columns=columns)
+    offset = row_start - (first_rg_start or 0)
+    table = table.slice(offset, n_rows)
+    return table.to_pandas()
 
 
 @router.post("/upload")
@@ -261,6 +381,97 @@ async def multifile_current():
         )
 
     return JSONResponse(jsonable_encoder({"datasets": datasets}))
+
+@router.get("/chunk")
+async def multifile_chunk(
+    dataset_id: str = Query(...),
+    row_start: int = Query(0),
+    col_start: int = Query(0),
+    n_rows: int = Query(20),
+    n_cols: int = Query(20),
+):
+    parquet_path = _dataset_dir(dataset_id) / "df.parquet"
+    if not parquet_path.exists():
+        raise api_error(404, "DATASET_NOT_FOUND", f"Dataset {dataset_id} not found")
+
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(parquet_path)
+    total_rows = int(pf.metadata.num_rows)
+    full_columns = list(pf.schema_arrow.names)
+    total_cols = int(len(full_columns))
+
+    if total_rows <= 0 or total_cols <= 0:
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "dataset_id": dataset_id,
+                    "total_rows": total_rows,
+                    "total_cols": total_cols,
+                    "row_start": 0,
+                    "col_start": 0,
+                    "n_rows": 0,
+                    "n_cols": 0,
+                    "columns": [],
+                    "rows": [],
+                }
+            )
+        )
+
+    n_rows_req = _clamp_int(int(n_rows), 1, 100)
+    n_cols_req = _clamp_int(int(n_cols), 1, 100)
+
+    row_start_clamped = _clamp_int(int(row_start), 0, max(0, total_rows - 1))
+    col_start_clamped = _clamp_int(int(col_start), 0, max(0, total_cols - 1))
+
+    row_end = min(total_rows, row_start_clamped + n_rows_req)
+    col_end = min(total_cols, col_start_clamped + n_cols_req)
+    n_rows_actual = max(0, row_end - row_start_clamped)
+    n_cols_actual = max(0, col_end - col_start_clamped)
+
+    columns = full_columns[col_start_clamped:col_end]
+
+    if n_rows_actual == 0 or n_cols_actual == 0:
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "dataset_id": dataset_id,
+                    "total_rows": total_rows,
+                    "total_cols": total_cols,
+                    "row_start": row_start_clamped,
+                    "col_start": col_start_clamped,
+                    "n_rows": n_rows_actual,
+                    "n_cols": n_cols_actual,
+                    "columns": columns,
+                    "rows": [],
+                }
+            )
+        )
+
+    df = _read_parquet_chunk_df(
+        parquet_path=parquet_path,
+        columns=columns,
+        row_start=row_start_clamped,
+        n_rows=n_rows_actual,
+    )
+    rows = _df_to_rows_2d(df)
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "dataset_id": dataset_id,
+                "total_rows": total_rows,
+                "total_cols": total_cols,
+                "row_start": row_start_clamped,
+                "col_start": col_start_clamped,
+                "n_rows": n_rows_actual,
+                "n_cols": n_cols_actual,
+                "columns": columns,
+                "rows": rows,
+            }
+        )
+    )
+
 
 
 @router.delete("/current/{dataset_id}")

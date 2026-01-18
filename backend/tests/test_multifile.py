@@ -156,3 +156,109 @@ async def test_multifile_delete_all(tmp_path: Path):
 
     subdirs = [p for p in tmp_path.iterdir() if p.is_dir()]
     assert len(subdirs) == 0
+
+
+@pytest.mark.asyncio
+async def test_multifile_chunk_basic_shape_and_values(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    csv = b"a,b,c\n1,2,3\n4,5,6\n7,8,9\n"
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        up = await ac.post(
+            "/multifile/upload",
+            files={"file": ("tiny.csv", io.BytesIO(csv), "text/csv")},
+        )
+        assert up.status_code == 200
+        dataset_id = up.json()["dataset_id"]
+
+        r = await ac.get(
+            "/multifile/chunk",
+            params={
+                "dataset_id": dataset_id,
+                "row_start": 0,
+                "col_start": 0,
+                "n_rows": 2,
+                "n_cols": 2,
+            },
+        )
+        assert r.status_code == 200
+        j = r.json()
+
+    assert j["dataset_id"] == dataset_id
+    assert j["total_rows"] == 3
+    assert j["total_cols"] == 3
+    assert j["row_start"] == 0
+    assert j["col_start"] == 0
+    assert j["n_rows"] == 2
+    assert j["n_cols"] == 2
+    assert j["columns"] == ["a", "b"]
+    assert j["rows"] == [[1, 2], [4, 5]]
+
+
+@pytest.mark.asyncio
+async def test_multifile_chunk_clamps_to_100_and_bounds(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    csv = b"a,b,c\n1,2,3\n4,5,6\n7,8,9\n"
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        up = await ac.post(
+            "/multifile/upload",
+            files={"file": ("tiny.csv", io.BytesIO(csv), "text/csv")},
+        )
+        assert up.status_code == 200
+        dataset_id = up.json()["dataset_id"]
+
+        r = await ac.get(
+            "/multifile/chunk",
+            params={
+                "dataset_id": dataset_id,
+                "row_start": 0,
+                "col_start": 0,
+                "n_rows": 999,
+                "n_cols": 999,
+            },
+        )
+        assert r.status_code == 200
+        j = r.json()
+
+    assert j["n_rows"] <= 100
+    assert j["n_cols"] <= 100
+    assert j["n_rows"] == 3
+    assert j["n_cols"] == 3
+    assert j["columns"] == ["a", "b", "c"]
+    assert j["rows"] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+
+
+@pytest.mark.asyncio
+async def test_multifile_chunk_row_start_beyond_end_clamps(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    csv = b"a,b,c\n1,2,3\n4,5,6\n7,8,9\n"
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        up = await ac.post(
+            "/multifile/upload",
+            files={"file": ("tiny.csv", io.BytesIO(csv), "text/csv")},
+        )
+        assert up.status_code == 200
+        dataset_id = up.json()["dataset_id"]
+
+        r = await ac.get(
+            "/multifile/chunk",
+            params={
+                "dataset_id": dataset_id,
+                "row_start": 999,
+                "col_start": 0,
+                "n_rows": 2,
+                "n_cols": 2,
+            },
+        )
+        assert r.status_code == 200
+        j = r.json()
+
+    assert j["row_start"] == 2
+    assert j["n_rows"] == 1
+    assert j["columns"] == ["a", "b"]
+    assert j["rows"] == [[7, 8]]
