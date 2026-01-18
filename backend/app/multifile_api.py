@@ -5,6 +5,8 @@ import json
 import math
 import re
 import shutil
+import duckdb 
+
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -112,6 +114,370 @@ def _safe_display_name_uploaded_at(dataset_id: str) -> tuple[str, str | None]:
         uploaded_at = None
 
     return display_name, uploaded_at
+
+def _quote_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _duckdb_register_current_tables(con: "duckdb.DuckDBPyConnection") -> dict[str, list[str]]:
+    """
+    Registers current ordered datasets as t1/t2/t3 views.
+    Returns mapping: {"t1": [cols...], ...}
+    """
+    ids = _read_current_ids()
+    if len(ids) == 0:
+        raise api_error(400, "NO_DATASETS", "No multifile datasets loaded")
+
+    table_cols: dict[str, list[str]] = {}
+
+    for idx, dataset_id in enumerate(ids[:3], start=1):
+        tname = f"t{idx}"
+        parquet_path = (_dataset_dir(dataset_id) / "df.parquet").resolve()
+        if not parquet_path.exists():
+            raise api_error(
+                500,
+                "STORAGE_INCONSISTENT",
+                f"Missing parquet for {dataset_id}. Try deleting and re-uploading.",
+            )
+
+        # DuckDB wants a string path; ensure quotes are safe
+        path_sql = str(parquet_path).replace("'", "''")
+        con.execute(
+            f"CREATE OR REPLACE VIEW {tname} AS SELECT * FROM read_parquet('{path_sql}')"
+        )
+
+        info = con.execute(f"PRAGMA table_info('{tname}')").fetchall()
+        cols = [row[1] for row in info]  # row[1] is column name
+        table_cols[tname] = cols
+
+    return table_cols
+
+
+def _parse_csv_list(s: str) -> list[str]:
+    return [x.strip() for x in s.split(",") if x.strip()]
+
+
+def _ops_validate_table(table: str, table_cols: dict[str, list[str]]) -> None:
+    if table not in table_cols:
+        raise api_error(
+            400,
+            "OPS_VALIDATION_ERROR",
+            f"Unknown table '{table}'. Available: {', '.join(sorted(table_cols.keys()))}",
+        )
+
+
+def _ops_validate_cols_exist(cols: list[str], available: list[str], ctx: str) -> None:
+    missing = [c for c in cols if c not in available]
+    if missing:
+        raise api_error(
+            400,
+            "OPS_VALIDATION_ERROR",
+            f"Missing column(s) in {ctx}: {missing}. Available: {available}",
+        )
+
+
+def _ops_literal_cmp_expr(
+    col_sql: str,
+    cmp: str,
+    value,
+    params: list,
+) -> str:
+    # handle null comparisons
+    if value is None:
+        if cmp == "==":
+            return f"{col_sql} IS NULL"
+        if cmp == "!=":
+            return f"{col_sql} IS NOT NULL"
+        raise api_error(
+            400,
+            "OPS_VALIDATION_ERROR",
+            f"Comparator '{cmp}' cannot be used with null; use == or !=",
+        )
+
+    op_map = {"==": "=", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
+    if cmp not in op_map:
+        raise api_error(400, "OPS_VALIDATION_ERROR", f"Unsupported comparator '{cmp}'")
+
+    params.append(value)
+    return f"{col_sql} {op_map[cmp]} ?"
+
+
+def _ops_build_ctes(
+    steps: list[dict],
+    table_cols: dict[str, list[str]],
+) -> tuple[str, list, list[str]]:
+    """
+    Returns (sql_with_ctes_and_final_select, params, final_columns)
+    We simulate/track the column names to validate later steps.
+    """
+    if not steps or not isinstance(steps, list):
+        raise api_error(400, "OPS_VALIDATION_ERROR", "steps must be a non-empty list")
+
+    # first step must be source
+    first = steps[0]
+    if not isinstance(first, dict) or first.get("op") != "source":
+        raise api_error(400, "OPS_VALIDATION_ERROR", "First step must be op='source'")
+
+    base_table = first.get("table")
+    if not isinstance(base_table, str):
+        raise api_error(400, "OPS_VALIDATION_ERROR", "source.table must be a string")
+    _ops_validate_table(base_table, table_cols)
+
+    params: list = []
+    ctes: list[tuple[str, str]] = []
+    cur_cols = list(table_cols[base_table])
+
+    ctes.append(("q0", f"SELECT * FROM {base_table}"))
+    prev = "q0"
+    qi = 1
+
+    for step in steps[1:]:
+        if not isinstance(step, dict):
+            raise api_error(400, "OPS_VALIDATION_ERROR", "Each step must be an object")
+
+        op = step.get("op")
+        if op == "select":
+            cols = step.get("columns")
+            if not isinstance(cols, list) or not all(isinstance(x, str) for x in cols):
+                raise api_error(
+                    400, "OPS_VALIDATION_ERROR", "select.columns must be string[]"
+                )
+            _ops_validate_cols_exist(cols, cur_cols, ctx="select")
+            sel = ", ".join(_quote_ident(c) for c in cols)
+            ctes.append((f"q{qi}", f"SELECT {sel} FROM {prev}"))
+            cur_cols = list(cols)
+
+        elif op == "filter":
+            conds = step.get("conditions")
+            if not isinstance(conds, list) or not conds:
+                raise api_error(
+                    400,
+                    "OPS_VALIDATION_ERROR",
+                    "filter.conditions must be a non-empty array",
+                )
+
+            parts: list[str] = []
+            for cond in conds:
+                if not isinstance(cond, dict):
+                    raise api_error(
+                        400, "OPS_VALIDATION_ERROR", "Each condition must be an object"
+                    )
+                column = cond.get("column")
+                cmp = cond.get("cmp")
+                value = cond.get("value")
+                if not isinstance(column, str) or not isinstance(cmp, str):
+                    raise api_error(
+                        400,
+                        "OPS_VALIDATION_ERROR",
+                        "filter condition requires column (string) and cmp (string)",
+                    )
+                _ops_validate_cols_exist([column], cur_cols, ctx="filter")
+                col_sql = f"{prev}.{_quote_ident(column)}"
+                parts.append(_ops_literal_cmp_expr(col_sql, cmp, value, params))
+
+            where_sql = " AND ".join(parts)
+            ctes.append((f"q{qi}", f"SELECT * FROM {prev} WHERE {where_sql}"))
+
+        elif op == "merge":
+            right_table = step.get("right_table")
+            how = step.get("how")
+            left_on = step.get("left_on")
+            right_on = step.get("right_on")
+
+            if not isinstance(right_table, str):
+                raise api_error(
+                    400, "OPS_VALIDATION_ERROR", "merge.right_table must be a string"
+                )
+            _ops_validate_table(right_table, table_cols)
+
+            if how not in ("inner", "left", "right", "outer"):
+                raise api_error(
+                    400,
+                    "OPS_VALIDATION_ERROR",
+                    "merge.how must be one of inner/left/right/outer",
+                )
+
+            if (
+                not isinstance(left_on, list)
+                or not isinstance(right_on, list)
+                or not left_on
+                or len(left_on) != len(right_on)
+                or not all(isinstance(x, str) for x in left_on)
+                or not all(isinstance(x, str) for x in right_on)
+            ):
+                raise api_error(
+                    400,
+                    "OPS_VALIDATION_ERROR",
+                    "merge.left_on and merge.right_on must be string[] of same non-zero length",
+                )
+
+            _ops_validate_cols_exist(left_on, cur_cols, ctx="merge left_on")
+            _ops_validate_cols_exist(right_on, table_cols[right_table], ctx="merge right_on")
+
+            join_map = {
+                "inner": "INNER JOIN",
+                "left": "LEFT JOIN",
+                "right": "RIGHT JOIN",
+                "outer": "FULL OUTER JOIN",
+            }
+
+            on_parts: list[str] = []
+            for lo, ro in zip(left_on, right_on):
+                on_parts.append(f"l.{_quote_ident(lo)} = r.{_quote_ident(ro)}")
+            on_sql = " AND ".join(on_parts)
+
+            # build a predictable column list (no duplicates)
+            out_names: set[str] = set()
+            select_exprs: list[str] = []
+
+            # left columns preserved
+            for c in cur_cols:
+                out_names.add(c)
+                select_exprs.append(f"l.{_quote_ident(c)} AS {_quote_ident(c)}")
+
+            # skip right join keys when identical to left join keys
+            right_skip = {ro for lo, ro in zip(left_on, right_on) if lo == ro}
+
+            right_cols = list(table_cols[right_table])
+            right_out_cols: list[str] = []
+            for c in right_cols:
+                if c in right_skip:
+                    continue
+                out = c
+                if out in out_names:
+                    out = f"{c}_right"
+                i2 = 2
+                while out in out_names:
+                    out = f"{c}_right{i2}"
+                    i2 += 1
+                out_names.add(out)
+                right_out_cols.append(out)
+                select_exprs.append(f"r.{_quote_ident(c)} AS {_quote_ident(out)}")
+
+            cur_cols = cur_cols + right_out_cols
+
+            select_sql = ", ".join(select_exprs)
+            ctes.append(
+                (
+                    f"q{qi}",
+                    f"SELECT {select_sql} FROM {prev} AS l {join_map[how]} {right_table} AS r ON {on_sql}",
+                )
+            )
+
+        elif op == "groupby":
+            by = step.get("by")
+            aggs = step.get("aggs")
+
+            if not isinstance(by, list) or not all(isinstance(x, str) for x in by) or not by:
+                raise api_error(
+                    400,
+                    "OPS_VALIDATION_ERROR",
+                    "groupby.by must be a non-empty string[]",
+                )
+            if not isinstance(aggs, list) or not aggs:
+                raise api_error(
+                    400,
+                    "OPS_VALIDATION_ERROR",
+                    "groupby.aggs must be a non-empty array",
+                )
+
+            _ops_validate_cols_exist(by, cur_cols, ctx="groupby.by")
+
+            agg_exprs: list[str] = []
+            out_cols = list(by)
+            allowed_fns = {"sum", "avg", "count", "min", "max"}
+
+            for a in aggs:
+                if not isinstance(a, dict):
+                    raise api_error(
+                        400, "OPS_VALIDATION_ERROR", "Each agg must be an object"
+                    )
+                col = a.get("column")
+                fn = a.get("fn")
+                as_name = a.get("as")
+
+                if not isinstance(fn, str) or fn not in allowed_fns:
+                    raise api_error(
+                        400,
+                        "OPS_VALIDATION_ERROR",
+                        f"agg.fn must be one of {sorted(allowed_fns)}",
+                    )
+                if not isinstance(as_name, str) or not as_name.strip():
+                    raise api_error(
+                        400, "OPS_VALIDATION_ERROR", "agg.as must be a non-empty string"
+                    )
+
+                if fn == "count" and col == "*":
+                    expr = "COUNT(*)"
+                else:
+                    if not isinstance(col, str) or not col.strip():
+                        raise api_error(
+                            400,
+                            "OPS_VALIDATION_ERROR",
+                            "agg.column must be a string (or '*' for count)",
+                        )
+                    _ops_validate_cols_exist([col], cur_cols, ctx="groupby.aggs")
+                    expr = f"{fn.upper()}({_quote_ident(col)})"
+
+                agg_exprs.append(f"{expr} AS {_quote_ident(as_name)}")
+                out_cols.append(as_name)
+
+            by_sql = ", ".join(_quote_ident(c) for c in by)
+            agg_sql = ", ".join(agg_exprs)
+            ctes.append((f"q{qi}", f"SELECT {by_sql}, {agg_sql} FROM {prev} GROUP BY {by_sql}"))
+            cur_cols = out_cols
+
+        elif op == "sort":
+            by = step.get("by")
+            ascending = step.get("ascending")
+
+            if not isinstance(by, list) or not all(isinstance(x, str) for x in by) or not by:
+                raise api_error(400, "OPS_VALIDATION_ERROR", "sort.by must be a non-empty string[]")
+            _ops_validate_cols_exist(by, cur_cols, ctx="sort.by")
+
+            if ascending is None:
+                ascending_list = [True] * len(by)
+            else:
+                if not isinstance(ascending, list) or not all(isinstance(x, bool) for x in ascending):
+                    raise api_error(
+                        400,
+                        "OPS_VALIDATION_ERROR",
+                        "sort.ascending must be boolean[] if provided",
+                    )
+                # pad/truncate
+                ascending_list = (ascending + [True] * len(by))[: len(by)]
+
+            parts: list[str] = []
+            for c, asc in zip(by, ascending_list):
+                parts.append(f"{_quote_ident(c)} {'ASC' if asc else 'DESC'}")
+
+            order_sql = ", ".join(parts)
+            ctes.append((f"q{qi}", f"SELECT * FROM {prev} ORDER BY {order_sql}"))
+
+        elif op == "limit":
+            n = step.get("n")
+            if not isinstance(n, int) or n <= 0:
+                raise api_error(400, "OPS_VALIDATION_ERROR", "limit.n must be a positive integer")
+            n = min(n, 100000)  # hard safety cap
+            ctes.append((f"q{qi}", f"SELECT * FROM {prev} LIMIT {n}"))
+
+        elif op == "source":
+            raise api_error(400, "OPS_VALIDATION_ERROR", "Only the first step may be 'source'")
+
+        else:
+            raise api_error(400, "OPS_VALIDATION_ERROR", f"Unsupported op '{op}'")
+
+        prev = f"q{qi}"
+        qi += 1
+
+    # build final SQL
+    with_parts = []
+    for name, sql in ctes:
+        with_parts.append(f"{name} AS ({sql})")
+    with_sql = "WITH " + ", ".join(with_parts)
+
+    final_sql = f"{with_sql} SELECT * FROM {prev}"
+    return final_sql, params, cur_cols
 
 
 def _clamp_int(v: int, lo: int, hi: int) -> int:
@@ -613,6 +979,64 @@ async def multifile_sql(req: MultiSQLRequest):
             con.close()
         except Exception:
             pass
+
+class MultiOpsRequest(BaseModel):
+    steps: list[dict]
+    max_cells: int | None = None
+    max_rows: int | None = None
+
+
+@router.post("/ops")
+async def multifile_ops(req: MultiOpsRequest):
+    # defaults + caps
+    max_cells = int(req.max_cells or 20000)
+    max_cells = max(1000, min(200000, max_cells))
+
+    hard_max_rows = 5000
+    max_rows_req = int(req.max_rows or hard_max_rows)
+    max_rows_req = max(1, min(hard_max_rows, max_rows_req))
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        table_cols = _duckdb_register_current_tables(con)
+
+        # build SQL from ops
+        sql, params, final_cols = _ops_build_ctes(req.steps, table_cols)
+
+        k = max(1, len(final_cols))
+        limit_by_cells = max(1, max_cells // k)
+        limit_rows = min(max_rows_req, limit_by_cells)
+        limit_plus_one = limit_rows + 1
+
+        # apply truncation cap outside pipeline
+        sql_limited = f"SELECT * FROM ({sql}) AS q LIMIT {limit_plus_one}"
+
+        df = con.execute(sql_limited, params).fetchdf()
+        truncated = len(df) > limit_rows
+        if truncated:
+            df = df.head(limit_rows)
+
+        columns = list(df.columns)
+        rows = _df_to_rows_2d(df)
+
+        note = None
+        if truncated:
+            note = f"Truncated to {limit_rows} rows (max_cells={max_cells})."
+
+        return JSONResponse(
+            jsonable_encoder(
+                {"columns": columns, "rows": rows, "truncated": truncated, "note": note}
+            )
+        )
+
+    except duckdb.Error as e:
+        raise api_error(400, "OPS_ERROR", f"DuckDB error: {e}")
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+
 
 
 @router.delete("/current/{dataset_id}")

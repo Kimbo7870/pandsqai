@@ -39,7 +39,63 @@ export interface MultiChunkResponse {
   rows: CellLike[][];
 }
 
+export interface MultiSqlRequest {
+  query: string;
+  max_cells?: number;
+  max_rows?: number;
+}
+
+export interface MultiSqlResponse {
+  columns: string[];
+  rows: CellLike[][];
+  truncated: boolean;
+  note: string | null;
+}
+
 export interface PreviewDims {
   rows: number;
   cols: number;
 }
+
+export type OpsMergeHow = "inner" | "left" | "right" | "outer";
+
+export type OpsTable = "t1" | "t2" | "t3";
+
+export type OpsCmp = "==" | "!=" | "<" | "<=" | ">" | ">=";
+
+export type OpsAggFn = "sum" | "avg" | "count" | "min" | "max";
+
+export type OpsStep =
+  | { op: "source"; table: OpsTable }
+  | { op: "select"; columns: string[] }
+  | {
+      op: "filter";
+      conditions: Array<{ column: string; cmp: OpsCmp; value: CellLike }>;
+    }
+  | {
+      op: "merge";
+      right_table: OpsTable;
+      how: "inner" | "left" | "right" | "outer";
+      left_on: string[];
+      right_on: string[];
+    }
+  | {
+      op: "groupby";
+      by: string[];
+      aggs: Array<{ column: string; fn: OpsAggFn; as: string }>;
+    }
+  | { op: "sort"; by: string[]; ascending?: boolean[] }
+  | { op: "limit"; n: number };
+
+export type MultiOpsRequest = {
+  steps: OpsStep[];
+  max_cells?: number;
+  max_rows?: number;
+};
+
+export type MultiOpsResponse = {
+  columns: string[];
+  rows: CellLike[][];
+  truncated: boolean;
+  note: string | null;
+};

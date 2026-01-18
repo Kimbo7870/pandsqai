@@ -13,25 +13,26 @@ const ROW_HEIGHT_PX = 24;
 const COL_WIDTH_PX = 140;
 const THROTTLE_MS = 90;
 
+function clampInt(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return lo;
+  return Math.min(hi, Math.max(lo, Math.trunc(n)));
+}
+
 function cellToText(v: CellLike): string {
   if (v === null) return "";
   return String(v);
 }
 
-function clampInt(v: number, lo: number, hi: number): number {
-  if (!Number.isFinite(v)) return lo;
-  return Math.max(lo, Math.min(hi, Math.trunc(v)));
-}
-
 export default function DatasetViewport({ dataset_id, title, viewRows, viewCols }: Props) {
   const dims = useMemo(() => {
-    return { rows: clampInt(viewRows, 1, 100), cols: clampInt(viewCols, 1, 100) };
+    return {
+      rows: clampInt(viewRows, 1, 100),
+      cols: clampInt(viewCols, 1, 100),
+    };
   }, [viewRows, viewCols]);
 
   const [rowStart, setRowStart] = useState<number>(0);
   const [colStart, setColStart] = useState<number>(0);
-  const [totalRows, setTotalRows] = useState<number>(0);
-  const [totalCols, setTotalCols] = useState<number>(0);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string>("");
   const [chunk, setChunk] = useState<MultiChunkResponse | null>(null);
@@ -43,31 +44,29 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
   const draggingRef = useRef<boolean>(false);
   const startRef = useRef<{ x: number; y: number; row: number; col: number } | null>(null);
 
-  const timerRef = useRef<number | null>(null);
   const pendingRef = useRef<{ row: number; col: number } | null>(null);
+  const timerRef = useRef<number | null>(null);
 
-  function maxRowStart(): number {
-    return Math.max(0, totalRows - dims.rows);
-  }
-  function maxColStart(): number {
-    return Math.max(0, totalCols - dims.cols);
-  }
+  const totalRows = chunk?.total_rows ?? 0;
+  const totalCols = chunk?.total_cols ?? 0;
+  const maxRowStart = Math.max(0, totalRows - dims.rows);
+  const maxColStart = Math.max(0, totalCols - dims.cols);
 
   function schedulePanUpdate(nextRow: number, nextCol: number) {
-    const r = clampInt(nextRow, 0, maxRowStart());
-    const c = clampInt(nextCol, 0, maxColStart());
-    pendingRef.current = { row: r, col: c };
+    const row = clampInt(nextRow, 0, maxRowStart);
+    const col = clampInt(nextCol, 0, maxColStart);
 
+    pendingRef.current = { row, col };
     if (timerRef.current !== null) return;
 
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
-      const p = pendingRef.current;
+      const pending = pendingRef.current;
       pendingRef.current = null;
-      if (!p) return;
+      if (!pending) return;
 
-      setRowStart((prev) => (prev === p.row ? prev : p.row));
-      setColStart((prev) => (prev === p.col ? prev : p.col));
+      setRowStart((prev) => (prev === pending.row ? prev : pending.row));
+      setColStart((prev) => (prev === pending.col ? prev : pending.col));
     }, THROTTLE_MS);
   }
 
@@ -76,12 +75,20 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    const p = pendingRef.current;
+    const pending = pendingRef.current;
     pendingRef.current = null;
-    if (!p) return;
-    setRowStart((prev) => (prev === p.row ? prev : p.row));
-    setColStart((prev) => (prev === p.col ? prev : p.col));
+    if (!pending) return;
+
+    setRowStart((prev) => (prev === pending.row ? prev : pending.row));
+    setColStart((prev) => (prev === pending.col ? prev : pending.col));
   }
+
+  useEffect(() => {
+    if (!chunk) return;
+    if (rowStart > maxRowStart) setRowStart(maxRowStart);
+    if (colStart > maxColStart) setColStart(maxColStart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dims.rows, dims.cols, totalRows, totalCols]);
 
   useEffect(() => {
     abortRef.current?.abort();
@@ -95,7 +102,7 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
 
     (async () => {
       try {
-        const j = await getMultiChunk(
+        const res = await getMultiChunk(
           dataset_id,
           rowStart,
           colStart,
@@ -103,22 +110,22 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
           dims.cols,
           ac.signal
         );
+
         if (reqIdRef.current !== myReqId) return;
 
-        setChunk(j);
-        setTotalRows(j.total_rows);
-        setTotalCols(j.total_cols);
+        setChunk(res);
 
-        // If backend clamped our starts, sync them.
-        if (j.row_start !== rowStart) setRowStart(j.row_start);
-        if (j.col_start !== colStart) setColStart(j.col_start);
+        // reconcile server clamps
+        if (res.row_start !== rowStart) setRowStart(res.row_start);
+        if (res.col_start !== colStart) setColStart(res.col_start);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
         if (reqIdRef.current !== myReqId) return;
         setErr(e instanceof Error ? e.message : "Failed to load chunk");
       } finally {
-        const isLatest = reqIdRef.current === myReqId;
-        if (isLatest) setLoading(false);
+        // ✅ no return in finally (fixes no-unsafe-finally)
+        const stale = reqIdRef.current !== myReqId;
+        if (!stale) setLoading(false);
       }
     })();
 
@@ -134,25 +141,42 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
     };
   }, []);
 
-  function onPointerDown(e: PointerEvent<HTMLDivElement>) {
+  function onPointerDownCapture(e: PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+
     setDragging(true);
     draggingRef.current = true;
     startRef.current = { x: e.clientX, y: e.clientY, row: rowStart, col: colStart };
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+
+    try {
+      (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
   }
 
   function onPointerMove(e: PointerEvent<HTMLDivElement>) {
     if (!draggingRef.current || !startRef.current) return;
+    e.preventDefault();
+
     const dx = e.clientX - startRef.current.x;
     const dy = e.clientY - startRef.current.y;
+
     const dCols = Math.round(dx / COL_WIDTH_PX);
     const dRows = Math.round(dy / ROW_HEIGHT_PX);
-    const nextRow = startRef.current.row - dRows;
-    const nextCol = startRef.current.col - dCols;
-    schedulePanUpdate(nextRow, nextCol);
+
+    schedulePanUpdate(startRef.current.row - dRows, startRef.current.col - dCols);
   }
 
-  function stopDrag() {
+  function stopDrag(e?: PointerEvent<HTMLDivElement>) {
+    if (e) {
+      try {
+        (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+    }
     setDragging(false);
     draggingRef.current = false;
     startRef.current = null;
@@ -180,14 +204,11 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
 
       <div
         className="h-[340px] overflow-hidden select-none"
-        style={{ cursor, touchAction: "none" }}
-        onPointerDown={onPointerDown}
+        style={{ cursor, touchAction: "none", userSelect: "none" }}
+        onPointerDownCapture={onPointerDownCapture}
         onPointerMove={onPointerMove}
         onPointerUp={stopDrag}
         onPointerCancel={stopDrag}
-        onPointerLeave={() => {
-          if (draggingRef.current) stopDrag();
-        }}
       >
         {loading ? (
           <div className="p-3 text-sm text-gray-600">Loading…</div>
@@ -196,49 +217,53 @@ export default function DatasetViewport({ dataset_id, title, viewRows, viewCols 
         ) : !chunk ? (
           <div className="p-3 text-sm text-gray-600">No data.</div>
         ) : (
-          <div className="h-full">
-            <table className="w-full text-sm table-fixed">
+          <div className="w-full h-full overflow-auto">
+            <table className="text-sm border-separate border-spacing-0 min-w-max">
               <thead>
-                <tr className="bg-gray-50 border-b border-gray-200">
+                <tr>
                   {chunk.columns.map((c) => (
                     <th
                       key={c}
-                      className="text-left text-xs font-medium text-gray-700 px-2 py-2"
-                      style={{ width: COL_WIDTH_PX }}
-                      title={c}
+                      className="sticky top-0 bg-gray-50 px-2 py-2 text-left border-b border-gray-200 font-medium text-gray-700"
+                      style={{ width: COL_WIDTH_PX, maxWidth: COL_WIDTH_PX }}
                     >
-                      <span className="block whitespace-nowrap overflow-hidden text-ellipsis">
+                      <div className="whitespace-nowrap overflow-hidden text-ellipsis" title={c}>
                         {c}
-                      </span>
+                      </div>
                     </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {chunk.rows.map((row, i) => (
-                  <tr key={i} className="border-b border-gray-100">
-                    {row.map((cell, j) => (
-                      <td
-                        key={j}
-                        className="px-2"
-                        style={{ width: COL_WIDTH_PX, height: ROW_HEIGHT_PX }}
-                        title={cellToText(cell)}
-                      >
-                        <span className="block whitespace-nowrap overflow-hidden text-ellipsis">
-                          {cellToText(cell)}
-                        </span>
-                      </td>
-                    ))}
+                  <tr key={i} className={i % 2 === 0 ? "bg-white" : "bg-gray-50"}>
+                    {row.map((cell, j) => {
+                      const text = cellToText(cell);
+                      return (
+                        <td
+                          key={j}
+                          className="px-2 border-b border-gray-200 align-middle"
+                          style={{
+                            height: ROW_HEIGHT_PX,
+                            width: COL_WIDTH_PX,
+                            maxWidth: COL_WIDTH_PX,
+                          }}
+                          title={text}
+                        >
+                          <div className="whitespace-nowrap overflow-hidden text-ellipsis">{text}</div>
+                        </td>
+                      );
+                    })}
                   </tr>
                 ))}
               </tbody>
             </table>
-
-            <div className="px-3 py-2 text-xs text-gray-600 border-t border-gray-200 bg-white">
-              Drag to pan (2D). Panning is clamped to dataset bounds.
-            </div>
           </div>
         )}
+      </div>
+
+      <div className="px-3 py-2 border-t border-gray-200 text-xs text-gray-600">
+        Drag to pan (hold and move).
       </div>
     </div>
   );

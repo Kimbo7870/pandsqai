@@ -3,7 +3,11 @@ import type {
   MultiChunkResponse,
   MultiCurrentResponse,
   MultiDeleteResponse,
+  MultiSqlRequest,
+  MultiSqlResponse,
   MultiUploadResponse,
+  MultiOpsRequest, 
+  MultiOpsResponse
 } from "./multifileTypes";
 
 export async function getMultiCurrent(): Promise<MultiCurrentResponse> {
@@ -73,4 +77,40 @@ export async function getMultiChunk(
     throw new Error(msg || `Failed to fetch chunk (${res.status})`);
   }
   return res.json() as Promise<MultiChunkResponse>;
+}
+
+export async function runMultiSql(
+  query: string,
+  opts?: { max_cells?: number; max_rows?: number; signal?: AbortSignal }
+): Promise<MultiSqlResponse> {
+  const payload: MultiSqlRequest = { query };
+  if (opts?.max_cells !== undefined) payload.max_cells = opts.max_cells;
+  if (opts?.max_rows !== undefined) payload.max_rows = opts.max_rows;
+
+  const res = await fetch(`${API_BASE}/multifile/sql`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: opts?.signal,
+  });
+
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `SQL failed (${res.status})`);
+  }
+  return res.json() as Promise<MultiSqlResponse>;
+}
+
+export async function runMultiOps(payload: MultiOpsRequest, signal?: AbortSignal): Promise<MultiOpsResponse> {
+  const res = await fetch(`${API_BASE}/multifile/ops`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "");
+    throw new Error(msg || `Ops request failed (${res.status})`);
+  }
+  return res.json() as Promise<MultiOpsResponse>;
 }

@@ -320,3 +320,68 @@ async def test_multifile_sql_truncation_flag(tmp_path: Path):
         assert j["truncated"] is True
         assert len(j["rows"]) == 3
         assert j["note"] is not None
+
+
+@pytest.mark.asyncio
+async def test_multifile_ops_merge_inner(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    transport = ASGITransport(app=app)
+
+    csv1 = b"id,a\n1,10\n2,20\n3,30\n"
+    csv2 = b"id,b\n1,100\n3,300\n4,400\n"
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("t1.csv", io.BytesIO(csv1), "text/csv")},
+        )
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("t2.csv", io.BytesIO(csv2), "text/csv")},
+        )
+
+        payload = {
+            "steps": [
+                {"op": "source", "table": "t1"},
+                {
+                    "op": "merge",
+                    "right_table": "t2",
+                    "how": "inner",
+                    "left_on": ["id"],
+                    "right_on": ["id"],
+                },
+                {"op": "sort", "by": ["id"], "ascending": [True]},
+            ]
+        }
+
+        r = await ac.post("/multifile/ops", json=payload)
+        assert r.status_code == 200
+        j = r.json()
+        assert j["truncated"] is False
+        assert j["columns"] == ["id", "a", "b"]
+        assert j["rows"] == [[1, 10, 100], [3, 30, 300]]
+
+
+@pytest.mark.asyncio
+async def test_multifile_ops_validation_error_missing_column(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    transport = ASGITransport(app=app)
+
+    csv1 = b"id,a\n1,10\n2,20\n"
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("t1.csv", io.BytesIO(csv1), "text/csv")},
+        )
+
+        payload = {
+            "steps": [
+                {"op": "source", "table": "t1"},
+                {"op": "filter", "conditions": [{"column": "does_not_exist", "cmp": "==", "value": 1}]},
+            ]
+        }
+
+        r = await ac.post("/multifile/ops", json=payload)
+        assert r.status_code == 400
+        assert r.json()["detail"]["code"] == "OPS_VALIDATION_ERROR"
