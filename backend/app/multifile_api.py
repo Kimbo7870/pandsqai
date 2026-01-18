@@ -3,7 +3,9 @@ from __future__ import annotations
 import decimal
 import json
 import math
+import re
 import shutil
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -12,11 +14,12 @@ import pandas as pd
 from fastapi import APIRouter, File, Query, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from .config import settings
-from .errors import api_error
 from .datasets.dedup import get_content_hash_bytes, write_content_hash_file
 from .datasets.store import get_parquet_row_col_counts, write_parquet_df
+from .errors import api_error
 
 router = APIRouter(prefix="/multifile")
 
@@ -109,6 +112,7 @@ def _safe_display_name_uploaded_at(dataset_id: str) -> tuple[str, str | None]:
         uploaded_at = None
 
     return display_name, uploaded_at
+
 
 def _clamp_int(v: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, v))
@@ -382,6 +386,7 @@ async def multifile_current():
 
     return JSONResponse(jsonable_encoder({"datasets": datasets}))
 
+
 @router.get("/chunk")
 async def multifile_chunk(
     dataset_id: str = Query(...),
@@ -472,6 +477,142 @@ async def multifile_chunk(
         )
     )
 
+
+# -------------------------
+# Chunk 6: SQL via DuckDB
+# -------------------------
+
+class MultiSQLRequest(BaseModel):
+    query: str
+    max_cells: int | None = None  # default 20000
+    max_rows: int | None = None   # default computed (but we also cap)
+
+
+def _normalize_sql(q: str) -> str:
+    s = (q or "").strip()
+    s = re.sub(r";+\s*$", "", s)  # strip trailing semicolons only
+    return s.strip()
+
+
+def _validate_sql_select_only(q: str) -> None:
+    s = _normalize_sql(q)
+    if not s:
+        raise api_error(400, "BAD_SQL", "Query is empty")
+    if ";" in s:
+        raise api_error(400, "BAD_SQL", "Only a single SQL statement is allowed")
+    head = s.lstrip().lower()
+    if not (head.startswith("select") or head.startswith("with")):
+        raise api_error(400, "BAD_SQL", "Only SELECT/WITH queries are allowed")
+
+
+@router.post("/sql")
+async def multifile_sql(req: MultiSQLRequest):
+    _validate_sql_select_only(req.query)
+
+    ids = _read_current_ids()
+    if len(ids) == 0:
+        raise api_error(400, "NO_DATASETS", "No multifile datasets are loaded")
+
+    # Limits / protection
+    max_cells_default = 20000
+    max_cells = int(req.max_cells) if req.max_cells is not None else max_cells_default
+    max_cells = _clamp_int(max_cells, 1_000, 200_000)
+
+    # Default max_rows is "computed", but also keep a reasonable cap for safety.
+    default_max_rows_cap = 500
+    hard_max_rows_cap = 5_000
+
+    user_query = _normalize_sql(req.query)
+
+    try:
+        import duckdb  # type: ignore
+    except Exception as e:
+        raise api_error(500, "MISSING_DEPENDENCY", f"DuckDB not installed: {e}")
+
+    con = duckdb.connect(database=":memory:")
+    try:
+        # Register t1/t2/t3 based on current order
+        for i, dataset_id in enumerate(ids[:3], start=1):
+            parquet_path = (_dataset_dir(dataset_id) / "df.parquet").resolve()
+            if not parquet_path.exists():
+                raise api_error(
+                    500,
+                    "STORAGE_INCONSISTENT",
+                    f"Missing parquet for dataset {dataset_id}",
+                )
+            p = str(parquet_path).replace("'", "''")
+            con.execute(f"CREATE OR REPLACE VIEW t{i} AS SELECT * FROM read_parquet('{p}')")
+
+        # 1) Determine output columns without pulling rows
+        try:
+            rel = con.sql(f"SELECT * FROM ({user_query}) AS q LIMIT 0")
+            columns = list(rel.columns)
+        except Exception as e:
+            raise api_error(400, "SQL_ERROR", str(e))
+
+        k = max(1, len(columns))
+        if k > max_cells:
+            raise api_error(
+                400,
+                "TOO_MANY_COLUMNS",
+                f"Query returns {k} columns which exceeds max_cells={max_cells}",
+            )
+
+        # 2) Compute max rows we can return under max_cells
+        max_rows_by_cells = max(1, max_cells // k)
+
+        # Apply user max_rows (or a safe default cap), then apply cell cap, then a hard cap.
+        base_rows = int(req.max_rows) if req.max_rows is not None else default_max_rows_cap
+        base_rows = _clamp_int(base_rows, 1, hard_max_rows_cap)
+        limit_rows = min(base_rows, max_rows_by_cells)
+
+        # 3) Execute wrapped query with limit+1 to detect truncation
+        wrapped = f"SELECT * FROM ({user_query}) AS q LIMIT {limit_rows + 1}"
+
+        timeout_s = 5.0
+
+        def _run_sql() -> pd.DataFrame:
+            return con.execute(wrapped).fetchdf()
+
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_run_sql)
+                df = fut.result(timeout=timeout_s)
+        except FutureTimeout:
+            try:
+                con.interrupt()
+            except Exception:
+                pass
+            raise api_error(408, "SQL_TIMEOUT", f"Query exceeded {timeout_s:.0f}s")
+        except Exception as e:
+            raise api_error(400, "SQL_ERROR", str(e))
+
+        truncated = False
+        if len(df) > limit_rows:
+            truncated = True
+            df = df.iloc[:limit_rows]
+
+        rows = _df_to_rows_2d(df)
+
+        note: str | None = None
+        if truncated:
+            note = f"Results truncated to {limit_rows} rows to stay under {max_cells} cells."
+
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "columns": [str(c) for c in columns],
+                    "rows": rows,
+                    "truncated": truncated,
+                    "note": note,
+                }
+            )
+        )
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
 
 
 @router.delete("/current/{dataset_id}")

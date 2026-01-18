@@ -262,3 +262,61 @@ async def test_multifile_chunk_row_start_beyond_end_clamps(tmp_path: Path):
     assert j["n_rows"] == 1
     assert j["columns"] == ["a", "b"]
     assert j["rows"] == [[7, 8]]
+
+
+@pytest.mark.asyncio
+async def test_multifile_sql_no_datasets(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)  # use your helper name
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        r = await ac.post("/multifile/sql", json={"query": "select 1"})
+        assert r.status_code == 400
+        assert r.json()["detail"]["code"] == "NO_DATASETS"
+
+
+@pytest.mark.asyncio
+async def test_multifile_sql_join_two_tables(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    transport = ASGITransport(app=app)
+
+    csv1 = b"id,a\n1,10\n2,20\n3,30\n"
+    csv2 = b"id,b\n1,100\n3,300\n4,400\n"
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await ac.post("/multifile/upload", files={"file": ("t1.csv", io.BytesIO(csv1), "text/csv")})
+        await ac.post("/multifile/upload", files={"file": ("t2.csv", io.BytesIO(csv2), "text/csv")})
+
+        q = """
+        SELECT t1.id, t1.a, t2.b
+        FROM t1
+        JOIN t2 USING (id)
+        ORDER BY id
+        """
+        r = await ac.post("/multifile/sql", json={"query": q})
+        assert r.status_code == 200
+        j = r.json()
+        assert j["truncated"] is False
+        assert j["columns"] == ["id", "a", "b"]
+        assert j["rows"] == [[1, 10, 100], [3, 30, 300]]
+
+
+@pytest.mark.asyncio
+async def test_multifile_sql_truncation_flag(tmp_path: Path):
+    _patch_multifile_data_dir(tmp_path)
+    transport = ASGITransport(app=app)
+
+    rows = "\n".join(str(i) for i in range(10))
+    csv = ("x\n" + rows + "\n").encode()
+
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        await ac.post("/multifile/upload", files={"file": ("big.csv", io.BytesIO(csv), "text/csv")})
+
+        r = await ac.post(
+            "/multifile/sql",
+            json={"query": "SELECT * FROM t1 ORDER BY x", "max_rows": 3},
+        )
+        assert r.status_code == 200
+        j = r.json()
+        assert j["truncated"] is True
+        assert len(j["rows"]) == 3
+        assert j["note"] is not None
