@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   deleteAllMultiDatasets,
@@ -7,66 +7,50 @@ import {
   uploadMultiDataset,
 } from "../lib/multifileApi";
 import type { MultiDatasetListItem, PreviewDims } from "../lib/multifileTypes";
+import DatasetPreviewModal, { type PreviewDataset } from "./DatasetPreviewModal";
 
 const PREVIEW_DIMS_KEY = "pandsqai.multifile.previewDims.v1";
 
-function clampInt(n: number, lo: number, hi: number): number {
-  if (Number.isNaN(n)) return lo;
-  return Math.min(hi, Math.max(lo, Math.trunc(n)));
+function clampPreviewDims(d: PreviewDims): PreviewDims {
+  const rows = Math.max(1, Math.min(100, Math.trunc(d.rows)));
+  const cols = Math.max(1, Math.min(100, Math.trunc(d.cols)));
+  return { rows, cols };
 }
 
-function readPreviewDimsFromStorage(defaultDims: PreviewDims): PreviewDims {
+function readPreviewDimsFromStorage(fallback: PreviewDims): PreviewDims {
   try {
     const raw = localStorage.getItem(PREVIEW_DIMS_KEY);
-    if (!raw) return defaultDims;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== "object") return defaultDims;
-    const obj = parsed as { rows?: unknown; cols?: unknown };
-    const rows = clampInt(Number(obj.rows), 1, 100);
-    const cols = clampInt(Number(obj.cols), 1, 100);
-    return { rows, cols };
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "rows" in parsed &&
+      "cols" in parsed
+    ) {
+      const rows = Number((parsed as { rows: unknown }).rows);
+      const cols = Number((parsed as { cols: unknown }).cols);
+      if (Number.isFinite(rows) && Number.isFinite(cols)) return clampPreviewDims({ rows, cols });
+    }
+    return fallback;
   } catch {
-    return defaultDims;
+    return fallback;
   }
 }
 
-function writePreviewDimsToStorage(dims: PreviewDims) {
+function writePreviewDimsToStorage(d: PreviewDims) {
   try {
-    localStorage.setItem(PREVIEW_DIMS_KEY, JSON.stringify(dims));
+    localStorage.setItem(PREVIEW_DIMS_KEY, JSON.stringify(d));
   } catch {
     // ignore
   }
 }
 
-function formatUploadedAt(uploaded_at: string | null): string {
-  if (!uploaded_at) return "—";
-  const dt = new Date(uploaded_at);
-  if (Number.isNaN(dt.getTime())) return "—";
-  return dt.toLocaleString();
-}
-
-function parseApiErrorMessage(msg: string): { code?: string; detail?: string } {
-  try {
-    const parsed = JSON.parse(msg) as unknown;
-    if (!parsed || typeof parsed !== "object") return {};
-    const root = parsed as { detail?: unknown };
-    if (!root.detail || typeof root.detail !== "object") return {};
-    const d = root.detail as { code?: unknown; detail?: unknown };
-    const code = typeof d.code === "string" ? d.code : undefined;
-    const detail = typeof d.detail === "string" ? d.detail : undefined;
-    return { code, detail };
-  } catch {
-    return {};
-  }
-}
-
-function toUserError(e: unknown): string {
-  if (e instanceof Error) {
-    const { code, detail } = parseApiErrorMessage(e.message);
-    if (code && detail) return `${code}: ${detail}`;
-    return e.message;
-  }
-  return "Something went wrong";
+function formatUploadedAt(v: string | null): string {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 export default function MultiFileHome() {
@@ -75,18 +59,22 @@ export default function MultiFileHome() {
   const defaultDims = useMemo<PreviewDims>(() => ({ rows: 20, cols: 20 }), []);
   const initialDims = useMemo(() => readPreviewDimsFromStorage(defaultDims), [defaultDims]);
 
+  const [previewRows, setPreviewRows] = useState<number>(initialDims.rows);
+  const [previewCols, setPreviewCols] = useState<number>(initialDims.cols);
+
   const [datasets, setDatasets] = useState<MultiDatasetListItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string>("");
 
-  const [previewRows, setPreviewRows] = useState<number>(initialDims.rows);
-  const [previewCols, setPreviewCols] = useState<number>(initialDims.cols);
-
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [uploading, setUploading] = useState<boolean>(false);
+  const [file, setFile] = useState<File | null>(null);
   const [mutating, setMutating] = useState<boolean>(false);
   const [toast, setToast] = useState<string>("");
   const toastTimer = useRef<number | null>(null);
+
+  const [previewOpen, setPreviewOpen] = useState<boolean>(false);
+  const [previewDataset, setPreviewDataset] = useState<PreviewDataset | null>(null);
+
+  const atCapacity = datasets.length >= 3;
 
   function showToast(message: string) {
     setToast(message);
@@ -94,243 +82,301 @@ export default function MultiFileHome() {
     toastTimer.current = window.setTimeout(() => setToast(""), 1000);
   }
 
-  async function refresh() {
-    setErr("");
-    const res = await getMultiCurrent();
-    setDatasets(res.datasets);
+  function openPreview(d: MultiDatasetListItem) {
+    setPreviewDataset({ dataset_id: d.dataset_id, display_name: d.display_name });
+    setPreviewOpen(true);
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const res = await getMultiCurrent();
-        if (!cancelled) setDatasets(res.datasets);
-      } catch (e) {
-        if (!cancelled) setErr(toUserError(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      if (toastTimer.current) window.clearTimeout(toastTimer.current);
-    };
+  function closePreview() {
+    setPreviewOpen(false);
+  }
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setErr("");
+    try {
+      const r = await getMultiCurrent();
+      setDatasets(r.datasets);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load datasets");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    writePreviewDimsToStorage({ rows: previewRows, cols: previewCols });
+    void refresh();
+    return () => {
+      if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    const d = clampPreviewDims({ rows: previewRows, cols: previewCols });
+    writePreviewDimsToStorage(d);
   }, [previewRows, previewCols]);
 
-  const slotsFull = datasets.length >= 3;
-
   async function onUpload() {
-    if (!selectedFile) return;
+    if (!file) return;
+    setMutating(true);
     setErr("");
-    setUploading(true);
     try {
-      const res = await uploadMultiDataset(selectedFile);
+      const resp = await uploadMultiDataset(file);
+      if (resp.already_present) showToast("Already added");
+      setFile(null);
       await refresh();
-      if (res.already_present) {
-        showToast("Already added");
-      }
-      setSelectedFile(null);
     } catch (e) {
-      setErr(toUserError(e));
+      setErr(e instanceof Error ? e.message : "Upload failed");
     } finally {
-      setUploading(false);
+      setMutating(false);
     }
   }
 
   async function onDeleteOne(dataset_id: string) {
-    setErr("");
     setMutating(true);
+    setErr("");
     try {
       await deleteMultiDataset(dataset_id);
       await refresh();
     } catch (e) {
-      setErr(toUserError(e));
+      setErr(e instanceof Error ? e.message : "Delete failed");
     } finally {
       setMutating(false);
     }
   }
 
   async function onDeleteAll() {
-    setErr("");
     setMutating(true);
+    setErr("");
     try {
       await deleteAllMultiDatasets();
       await refresh();
     } catch (e) {
-      setErr(toUserError(e));
+      setErr(e instanceof Error ? e.message : "Delete all failed");
     } finally {
       setMutating(false);
     }
   }
 
+  function onChangeRows(v: string) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return;
+    setPreviewRows(Math.max(1, Math.min(100, Math.trunc(n))));
+  }
+
+  function onChangeCols(v: string) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return;
+    setPreviewCols(Math.max(1, Math.min(100, Math.trunc(n))));
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <div className="max-w-5xl mx-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-semibold text-gray-900">Multifile</h1>
+      <div className="max-w-5xl mx-auto px-4 py-6">
+        <div className="flex items-center justify-between">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold text-gray-900">Multifile</h1>
+            <p className="text-sm text-gray-600">
+              Upload up to 3 datasets. Aliases will be t1, t2, t3 based on order.
+            </p>
+          </div>
           <div className="flex gap-2">
-            <button
-              onClick={() => navigate("/multifile/view-all")}
-              disabled={datasets.length === 0}
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
-            >
-              View all
-            </button>
             <Link
               to="/"
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors"
+              className="px-3 py-2 border border-gray-300 rounded text-gray-800 hover:bg-gray-100"
             >
               Back
             </Link>
+            <button
+              type="button"
+              className={`px-3 py-2 border rounded ${
+                datasets.length === 0
+                  ? "border-gray-200 text-gray-400 cursor-not-allowed"
+                  : "border-gray-300 text-gray-800 hover:bg-gray-100"
+              }`}
+              disabled={datasets.length === 0}
+              onClick={() => navigate("/multifile/view-all")}
+            >
+              View all
+            </button>
           </div>
         </div>
 
-        {/* Toast */}
         {toast && (
-          <div className="flex justify-center">
-            <div className="px-3 py-2 bg-gray-900 text-white text-sm rounded shadow">
-              {toast}
-            </div>
+          <div className="mt-4 flex justify-center">
+            <div className="px-3 py-2 bg-gray-900 text-white rounded shadow text-sm">{toast}</div>
           </div>
         )}
 
-        {/* Preview dims */}
-        <div className="border border-gray-300 rounded p-4 bg-white space-y-3">
-          <div>
-            <p className="font-medium text-gray-900">Preview dimensions</p>
-            <p className="text-sm text-gray-600">
-              Used for Multifile previews later. Values are clamped to 1–100 and saved locally.
-            </p>
+        {err && (
+          <div className="mt-4 border border-gray-200 bg-white rounded p-3 text-sm text-gray-800">
+            {err}
           </div>
+        )}
 
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">Rows</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={100}
-                value={previewRows}
-                onChange={(e) => setPreviewRows(clampInt(Number(e.target.value), 1, 100))}
-                className="w-24 px-2 py-1 border border-gray-300 rounded"
-              />
-            </label>
-            <label className="flex items-center gap-2">
-              <span className="text-sm text-gray-700">Cols</span>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={100}
-                value={previewCols}
-                onChange={(e) => setPreviewCols(clampInt(Number(e.target.value), 1, 100))}
-                className="w-24 px-2 py-1 border border-gray-300 rounded"
-              />
-            </label>
-          </div>
-        </div>
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="md:col-span-1 bg-white border border-gray-200 rounded p-4">
+            <h2 className="text-sm font-medium text-gray-900">Preview size</h2>
+            <p className="text-xs text-gray-600 mt-1">Used for previews and view-all windows.</p>
 
-        {/* Upload panel */}
-        <div className="border border-gray-300 rounded p-4 bg-white space-y-3">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="font-medium text-gray-900">Upload dataset (0–3)</p>
-              <p className="text-sm text-gray-600">
-                Upload up to 3 datasets. Duplicate content won’t consume a slot.
-              </p>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-700">Rows</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={previewRows}
+                  onChange={(e) => onChangeRows(e.target.value)}
+                  className="mt-1 w-full px-2 py-1 border border-gray-300 rounded bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-700">Cols</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={previewCols}
+                  onChange={(e) => onChangeCols(e.target.value)}
+                  className="mt-1 w-full px-2 py-1 border border-gray-300 rounded bg-white"
+                />
+              </div>
             </div>
-            <div className="text-sm text-gray-600">Slots: {datasets.length}/3</div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="file"
-              accept=".csv,.parquet"
-              disabled={slotsFull || uploading || mutating}
-              onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
-              className="block text-sm text-gray-700"
-            />
+          <div className="md:col-span-2 bg-white border border-gray-200 rounded p-4">
+            <h2 className="text-sm font-medium text-gray-900">Upload dataset</h2>
+            <p className="text-xs text-gray-600 mt-1">Accepts .csv or .parquet. Max 3 loaded.</p>
 
-            <button
-              onClick={onUpload}
-              disabled={!selectedFile || slotsFull || uploading || mutating}
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
-            >
-              {uploading ? "Uploading..." : "Upload"}
-            </button>
+            <div className="mt-3 flex flex-col md:flex-row gap-3 md:items-center">
+              <input
+                type="file"
+                accept=".csv,.parquet"
+                disabled={atCapacity || mutating}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="block w-full text-sm text-gray-700"
+              />
+              <button
+                type="button"
+                onClick={() => void onUpload()}
+                disabled={!file || atCapacity || mutating}
+                className={`px-3 py-2 rounded border ${
+                  !file || atCapacity || mutating
+                    ? "border-gray-200 text-gray-400 cursor-not-allowed"
+                    : "border-gray-300 text-gray-800 hover:bg-gray-100"
+                }`}
+              >
+                Upload
+              </button>
+            </div>
+
+            {atCapacity && (
+              <div className="mt-3 text-xs text-gray-600">
+                Capacity reached (3 datasets). Delete one to upload another.
+              </div>
+            )}
           </div>
-
-          {slotsFull && (
-            <p className="text-sm text-gray-600">Upload disabled: all 3 slots are full.</p>
-          )}
         </div>
 
-        {/* Errors */}
-        {err && <p className="text-gray-700">{err}</p>}
-
-        {/* Current list */}
-        <div className="border border-gray-300 rounded p-4 bg-white space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="font-medium text-gray-900">Current datasets</p>
+        <div className="mt-6 bg-white border border-gray-200 rounded">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+            <h2 className="text-sm font-medium text-gray-900">Current datasets</h2>
             <button
-              onClick={onDeleteAll}
-              disabled={datasets.length === 0 || mutating || uploading}
-              className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
+              type="button"
+              onClick={() => void onDeleteAll()}
+              disabled={datasets.length === 0 || mutating}
+              className={`px-3 py-2 rounded border ${
+                datasets.length === 0 || mutating
+                  ? "border-gray-200 text-gray-400 cursor-not-allowed"
+                  : "border-gray-300 text-gray-800 hover:bg-gray-100"
+              }`}
             >
-              {mutating ? "Working..." : "Delete all"}
+              Delete all
             </button>
           </div>
 
           {loading ? (
-            <p className="text-sm text-gray-600">Loading...</p>
+            <div className="p-4 text-sm text-gray-600">Loading…</div>
           ) : datasets.length === 0 ? (
-            <p className="text-sm text-gray-600">No datasets loaded yet.</p>
+            <div className="p-4 text-sm text-gray-600">
+              No datasets loaded. Upload up to 3 to begin.
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
-                <thead>
+                <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="px-2 py-2 text-left border-b border-gray-300">Name</th>
-                    <th className="px-2 py-2 text-left border-b border-gray-300">Rows</th>
-                    <th className="px-2 py-2 text-left border-b border-gray-300">Cols</th>
-                    <th className="px-2 py-2 text-left border-b border-gray-300">Uploaded</th>
-                    <th className="px-2 py-2 text-right border-b border-gray-300">Actions</th>
+                    <th className="text-left font-medium text-gray-700 px-4 py-2">Name</th>
+                    <th className="text-left font-medium text-gray-700 px-4 py-2">Rows</th>
+                    <th className="text-left font-medium text-gray-700 px-4 py-2">Cols</th>
+                    <th className="text-left font-medium text-gray-700 px-4 py-2">Uploaded</th>
+                    <th className="text-right font-medium text-gray-700 px-4 py-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {datasets.map((d) => (
-                    <tr key={d.dataset_id} className="odd:bg-gray-50">
-                      <td className="px-2 py-2 border-b border-gray-300">{d.display_name}</td>
-                      <td className="px-2 py-2 border-b border-gray-300">{d.n_rows}</td>
-                      <td className="px-2 py-2 border-b border-gray-300">{d.n_cols}</td>
-                      <td className="px-2 py-2 border-b border-gray-300">
-                        {formatUploadedAt(d.uploaded_at)}
+                    <tr
+                      key={d.dataset_id}
+                      className="odd:bg-gray-50 hover:bg-gray-100 cursor-pointer"
+                      onClick={() => openPreview(d)}
+                      title="Click to preview"
+                    >
+                      <td className="px-4 py-2 text-gray-900 whitespace-nowrap">
+                        {d.display_name}
                       </td>
-                      <td className="px-2 py-2 border-b border-gray-300 text-right">
-                        <button
-                          onClick={() => onDeleteOne(d.dataset_id)}
-                          disabled={mutating || uploading}
-                          className="px-3 py-1 bg-gray-600 text-white rounded hover:bg-gray-700 active:bg-gray-800 transition-colors disabled:bg-gray-400"
-                        >
-                          Delete
-                        </button>
+                      <td className="px-4 py-2 text-gray-700">{d.n_rows}</td>
+                      <td className="px-4 py-2 text-gray-700">{d.n_cols}</td>
+                      <td className="px-4 py-2 text-gray-700">{formatUploadedAt(d.uploaded_at)}</td>
+                      <td className="px-4 py-2 text-right">
+                        <div className="inline-flex gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openPreview(d);
+                            }}
+                            className="px-3 py-1 rounded border border-gray-300 text-gray-800 hover:bg-gray-100"
+                          >
+                            Preview
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void onDeleteOne(d.dataset_id);
+                            }}
+                            disabled={mutating}
+                            className={`px-3 py-1 rounded border ${
+                              mutating
+                                ? "border-gray-200 text-gray-400 cursor-not-allowed"
+                                : "border-gray-300 text-gray-800 hover:bg-gray-100"
+                            }`}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+
+              <div className="px-4 py-3 text-xs text-gray-600 border-t border-gray-200">
+                Tip: Click a row (or Preview) to open the preview modal.
+              </div>
             </div>
           )}
         </div>
       </div>
+
+      <DatasetPreviewModal
+        open={previewOpen}
+        onClose={closePreview}
+        dataset={previewDataset}
+        previewRows={previewRows}
+        previewCols={previewCols}
+      />
     </div>
   );
 }
