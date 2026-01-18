@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str = "http://localhost:5173"
     OPENAI_API_KEY: str | None = None
     DATA_DIR: Path = Path("data")
+    MULTIFILE_DATA_DIR: Path = Path("data_multifile")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -18,3 +19,4 @@ class Settings(BaseSettings):
 
 settings = Settings()
 settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
+settings.MULTIFILE_DATA_DIR.mkdir(parents=True, exist_ok=True)
