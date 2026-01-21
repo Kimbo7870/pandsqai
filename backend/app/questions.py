@@ -12,7 +12,6 @@ from .services.questions.templates import TemplateContext, TEMPLATES
 from .errors import api_error
 from .config import settings
 
-
 router = APIRouter()
 
 

@@ -283,8 +283,14 @@ async def test_multifile_sql_join_two_tables(tmp_path: Path):
     csv2 = b"id,b\n1,100\n3,300\n4,400\n"
 
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        await ac.post("/multifile/upload", files={"file": ("t1.csv", io.BytesIO(csv1), "text/csv")})
-        await ac.post("/multifile/upload", files={"file": ("t2.csv", io.BytesIO(csv2), "text/csv")})
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("t1.csv", io.BytesIO(csv1), "text/csv")},
+        )
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("t2.csv", io.BytesIO(csv2), "text/csv")},
+        )
 
         q = """
         SELECT t1.id, t1.a, t2.b
@@ -309,7 +315,10 @@ async def test_multifile_sql_truncation_flag(tmp_path: Path):
     csv = ("x\n" + rows + "\n").encode()
 
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        await ac.post("/multifile/upload", files={"file": ("big.csv", io.BytesIO(csv), "text/csv")})
+        await ac.post(
+            "/multifile/upload",
+            files={"file": ("big.csv", io.BytesIO(csv), "text/csv")},
+        )
 
         r = await ac.post(
             "/multifile/sql",
@@ -378,7 +387,12 @@ async def test_multifile_ops_validation_error_missing_column(tmp_path: Path):
         payload = {
             "steps": [
                 {"op": "source", "table": "t1"},
-                {"op": "filter", "conditions": [{"column": "does_not_exist", "cmp": "==", "value": 1}]},
+                {
+                    "op": "filter",
+                    "conditions": [
+                        {"column": "does_not_exist", "cmp": "==", "value": 1}
+                    ],
+                },
             ]
         }
 

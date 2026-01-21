@@ -5,7 +5,7 @@ import json
 import math
 import re
 import shutil
-import duckdb 
+import duckdb
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import date, datetime, timezone
@@ -115,11 +115,14 @@ def _safe_display_name_uploaded_at(dataset_id: str) -> tuple[str, str | None]:
 
     return display_name, uploaded_at
 
+
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _duckdb_register_current_tables(con: "duckdb.DuckDBPyConnection") -> dict[str, list[str]]:
+def _duckdb_register_current_tables(
+    con: "duckdb.DuckDBPyConnection",
+) -> dict[str, list[str]]:
     """
     Registers current ordered datasets as t1/t2/t3 views.
     Returns mapping: {"t1": [cols...], ...}
@@ -312,7 +315,9 @@ def _ops_build_ctes(
                 )
 
             _ops_validate_cols_exist(left_on, cur_cols, ctx="merge left_on")
-            _ops_validate_cols_exist(right_on, table_cols[right_table], ctx="merge right_on")
+            _ops_validate_cols_exist(
+                right_on, table_cols[right_table], ctx="merge right_on"
+            )
 
             join_map = {
                 "inner": "INNER JOIN",
@@ -368,7 +373,11 @@ def _ops_build_ctes(
             by = step.get("by")
             aggs = step.get("aggs")
 
-            if not isinstance(by, list) or not all(isinstance(x, str) for x in by) or not by:
+            if (
+                not isinstance(by, list)
+                or not all(isinstance(x, str) for x in by)
+                or not by
+            ):
                 raise api_error(
                     400,
                     "OPS_VALIDATION_ERROR",
@@ -424,21 +433,31 @@ def _ops_build_ctes(
 
             by_sql = ", ".join(_quote_ident(c) for c in by)
             agg_sql = ", ".join(agg_exprs)
-            ctes.append((f"q{qi}", f"SELECT {by_sql}, {agg_sql} FROM {prev} GROUP BY {by_sql}"))
+            ctes.append(
+                (f"q{qi}", f"SELECT {by_sql}, {agg_sql} FROM {prev} GROUP BY {by_sql}")
+            )
             cur_cols = out_cols
 
         elif op == "sort":
             by = step.get("by")
             ascending = step.get("ascending")
 
-            if not isinstance(by, list) or not all(isinstance(x, str) for x in by) or not by:
-                raise api_error(400, "OPS_VALIDATION_ERROR", "sort.by must be a non-empty string[]")
+            if (
+                not isinstance(by, list)
+                or not all(isinstance(x, str) for x in by)
+                or not by
+            ):
+                raise api_error(
+                    400, "OPS_VALIDATION_ERROR", "sort.by must be a non-empty string[]"
+                )
             _ops_validate_cols_exist(by, cur_cols, ctx="sort.by")
 
             if ascending is None:
                 ascending_list = [True] * len(by)
             else:
-                if not isinstance(ascending, list) or not all(isinstance(x, bool) for x in ascending):
+                if not isinstance(ascending, list) or not all(
+                    isinstance(x, bool) for x in ascending
+                ):
                     raise api_error(
                         400,
                         "OPS_VALIDATION_ERROR",
@@ -457,12 +476,16 @@ def _ops_build_ctes(
         elif op == "limit":
             n = step.get("n")
             if not isinstance(n, int) or n <= 0:
-                raise api_error(400, "OPS_VALIDATION_ERROR", "limit.n must be a positive integer")
+                raise api_error(
+                    400, "OPS_VALIDATION_ERROR", "limit.n must be a positive integer"
+                )
             n = min(n, 100000)  # hard safety cap
             ctes.append((f"q{qi}", f"SELECT * FROM {prev} LIMIT {n}"))
 
         elif op == "source":
-            raise api_error(400, "OPS_VALIDATION_ERROR", "Only the first step may be 'source'")
+            raise api_error(
+                400, "OPS_VALIDATION_ERROR", "Only the first step may be 'source'"
+            )
 
         else:
             raise api_error(400, "OPS_VALIDATION_ERROR", f"Unsupported op '{op}'")
@@ -848,10 +871,11 @@ async def multifile_chunk(
 # Chunk 6: SQL via DuckDB
 # -------------------------
 
+
 class MultiSQLRequest(BaseModel):
     query: str
     max_cells: int | None = None  # default 20000
-    max_rows: int | None = None   # default computed (but we also cap)
+    max_rows: int | None = None  # default computed (but we also cap)
 
 
 def _normalize_sql(q: str) -> str:
@@ -907,7 +931,9 @@ async def multifile_sql(req: MultiSQLRequest):
                     f"Missing parquet for dataset {dataset_id}",
                 )
             p = str(parquet_path).replace("'", "''")
-            con.execute(f"CREATE OR REPLACE VIEW t{i} AS SELECT * FROM read_parquet('{p}')")
+            con.execute(
+                f"CREATE OR REPLACE VIEW t{i} AS SELECT * FROM read_parquet('{p}')"
+            )
 
         # 1) Determine output columns without pulling rows
         try:
@@ -928,7 +954,9 @@ async def multifile_sql(req: MultiSQLRequest):
         max_rows_by_cells = max(1, max_cells // k)
 
         # Apply user max_rows (or a safe default cap), then apply cell cap, then a hard cap.
-        base_rows = int(req.max_rows) if req.max_rows is not None else default_max_rows_cap
+        base_rows = (
+            int(req.max_rows) if req.max_rows is not None else default_max_rows_cap
+        )
         base_rows = _clamp_int(base_rows, 1, hard_max_rows_cap)
         limit_rows = min(base_rows, max_rows_by_cells)
 
@@ -979,6 +1007,7 @@ async def multifile_sql(req: MultiSQLRequest):
             con.close()
         except Exception:
             pass
+
 
 class MultiOpsRequest(BaseModel):
     steps: list[dict]
@@ -1036,7 +1065,6 @@ async def multifile_ops(req: MultiOpsRequest):
             con.close()
         except Exception:
             pass
-
 
 
 @router.delete("/current/{dataset_id}")
