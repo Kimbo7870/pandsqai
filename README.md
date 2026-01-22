@@ -1,20 +1,22 @@
 # Pandas/SQL online environment with runnable editors
 **Upload a dataset; visualize and mess around with it**
-**generate Pandas/SQL practice questions;play, grade, review**
+**generate Pandas/SQL practice questions; + grading + review**
 
-A lightweight full-stack app for drilling practical Pandas/SQL skills on *your own data*.  
-Designed for interview prep and “learn by doing” repetition: you upload a CSV/Parquet file, the backend generates questions deterministically, and the frontend runs a clean quiz flow (MCQ + short-answer) with optional server-side grading.
+- A lightweight full-stack app for drilling practical Pandas/SQL skills on any input dataset.
+- Designed for interview prep roles with your custom datasets.
+- To use, you upload a CSV/Parquet file, the backend generates questions deterministically, and the frontend runs custom quiz questions with optional server-side grading.
+- An SQL/pandas Python Editor is built in.
+
 
 ---
 
 ## Features
 
-- **Dataset upload**: CSV/Parquet upload with preview + column metadata
-- **Question generation**: deterministic templates (same dataset → same questions)
+- **Dataset upload**: CSV/Parquet upload with preview and metadata
+- **Question generation**: deterministic templates
 - **Quiz runner**: MCQ + short-answer, keyboard-friendly navigation
-- **Reveal + review mode**: show solutions, then review what you missed
-- **Optional server grading**: keep the client simple or validate centrally
-- **Clean developer workflow**: lint/format/test + CI-friendly structure
+- **Review mode**: show solutions, then review what you missed
+- **Editor**: runnable SQL/Python pandas editor
 
 ---
 
@@ -22,8 +24,7 @@ Designed for interview prep and “learn by doing” repetition: you upload a CS
 
 **Backend**
 - FastAPI (Python)
-- pandas + pyarrow (for canonical parsing/storage)
-- Deterministic seeding via content hashing
+- pandas + pyarrow (for parsing/storage)
 
 **Frontend**
 - React + Vite + TypeScript
